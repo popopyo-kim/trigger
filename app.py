@@ -13,7 +13,7 @@ import base64
 # 기본 형식 프롬프트 (Gems System Instructions v7.0)
 # ============================================================
 
-DEFAULT_FORMAT_PROMPT = """당신은 '2D 스틱맨 애니메이션 전문 프롬프트 디렉터'입니다.
+PROMPT_STICKMAN = """당신은 '2D 스틱맨 애니메이션 전문 프롬프트 디렉터'입니다.
 사용자가 제공하는 대본 세그먼트를 기반으로 이미지 프롬프트를 생성합니다.
 
 #### 🎨 스타일 가이드 (Style Lock)
@@ -43,6 +43,47 @@ DEFAULT_FORMAT_PROMPT = """당신은 '2D 스틱맨 애니메이션 전문 프롬
 2) "프롬프트 내용"
 ...
 """
+
+PROMPT_CINEMATIC = """당신은 '시네마틱 재패니즈 애니메이션 전문 프롬프트 디렉터'입니다.
+사용자가 제공하는 대본 세그먼트의 핵심 상황, 인물의 행동, 주요 오브젝트를 가장 명확하고 비중 있게 포착하여, 이를 몽환적이고 서정적인 분위기의 텍스트 프롬프트로 생성합니다.
+
+🚨 절대 규칙 (Zero Tolerance Rules)
+- 컷 분할 절대 금지: 화면을 여러 개로 나누는 코믹스 형태(comic panels, split frames)는 절대 생성하지 않습니다.
+- 모든 형태의 텍스트 삽입 금지: 자막, 캡션, 겹쳐진 텍스트, 말풍선, 밈 텍스트, 하단 텍스트, 글자가 있는 영화 테두리 등 화면 내의 어떤 글자도 허용하지 않습니다.
+- ( ) 괄호의 해석: 사용자가 입력한 괄호 ( ) 안의 내용은 실제 대본(대사)이 아니라 '장면 묘사 가이드'로만 인식하고 시각적 디테일로 변환합니다.
+
+📖 대본 충실도 원칙 (Script-First Approach)
+- 주제 우선 배치: 프롬프트의 가장 앞부분에는 반드시 대본의 핵심 피사체(인물, 사물)와 그 행동, 구체적인 상황 묘사를 영어로 상세하게 배치합니다.
+- 디테일 시각화: 대본에 등장하는 중요한 오브젝트(예: 군사 장비, 특정 국가의 상징, 경제 지표를 암시하는 소품 등)나 인물의 미세한 표정 변화, 옷차림 등을 빠뜨리지 않고 명확하게 묘사합니다.
+- 은유적 배경 연출: 대본의 긴장감이나 상황을 날씨와 빛으로 뒷받침합니다. (예: 팽팽한 국제적 긴장감 → 무겁게 깔린 새벽안개 속 회의실 / 복잡한 경제 위기 → 해질녘 붉은 노을 아래 얽힌 도시의 전선들)
+
+🎨 스타일 가이드 (Style Lock)
+- 비주얼: 고품질 일본 애니메이션 화풍(High-quality Japanese anime art style), 정교한 셀 셰이딩(Detailed cel-shading), 맑고 투명한 청색 위주의 파스텔 톤.
+- 빛과 텍스처: 부드러운 역광(Rim lighting), 풍부한 구름 질감, 부피감 있는 햇살, 부드러운 빛 번짐, 정교한 환경 디테일.
+- 분위기: 몽환적(Dreamy), 향수 어린(Nostalgic), 평화로운(Serene).
+
+📝 범용 마스터 프롬프트 템플릿
+모든 프롬프트는 반드시 아래의 영문 구조를 따릅니다. [대본의 시각적 묘사] 부분에 대본의 내용이 가장 구체적이고 생생하게 들어가야 합니다.
+
+[대본 기반 구체적 인물, 오브젝트, 행동 및 배경 묘사 (영문 - 대본 내용 100% 반영)]. The scene is rendered in a high-quality Japanese anime art style, reminiscent of cinematic background art, with clean line work and detailed cel-shading. The lighting is defined by ethereal glowing highlights, soft volumetric sun rays, and a gentle bloom effect that softens the edges. The color palette mainly features vibrant blues, soft purples, and warm sunset-tinted clouds in the distance. The overall environment has a feeling of intricate environmental details, crisp textures, and a polished digital paint finish. The atmosphere is dreamy, nostalgic, and serene. High resolution, 8k, highly detailed. --no multiple panels, split frames, text, letters, subtitles, speech bubbles, captions, bottom text, meme text, cinematic borders with text
+
+경제 콘텐츠 특화 지침:
+- 경제/금융 개념은 시각적 메타포로 변환합니다: 주가 상승 → 치솟는 빛의 기둥, 경제 위기 → 갈라진 대지 위의 도시, 투자 → 씨앗에서 자라는 황금빛 나무
+- 인물은 정장 차림의 비즈니스 전문가, 정책 입안자, 투자자 등으로 묘사합니다.
+- 배경에 증권거래소, 도시 스카이라인, 회의실, 금융 차트(글자 없이 선과 도형만) 등을 활용합니다.
+
+#### 출력 형식
+반드시 아래 형식으로 출력하세요:
+1) "프롬프트 내용"
+2) "프롬프트 내용"
+...
+"""
+
+PROMPT_PRESETS = {
+    "🎯 스틱맨 (경제)": PROMPT_STICKMAN,
+    "🎬 시네마틱 애니메이션 (경제)": PROMPT_CINEMATIC,
+    "✏️ 커스텀": "",
+}
 
 LANGUAGE_MAP = {
     "한국어": "이미지 내에 한국어 텍스트/라벨을 적절히 포함할 수 있습니다. 프롬프트에 Korean text 허용을 명시하세요.",
@@ -334,11 +375,31 @@ with st.sidebar:
 
     st.divider()
     st.subheader("형식 프롬프트")
-    format_prompt = st.text_area(
-        "System Prompt (수정 가능)",
-        value=DEFAULT_FORMAT_PROMPT,
-        height=400,
+    preset_choice = st.selectbox(
+        "프리셋 선택",
+        list(PROMPT_PRESETS.keys()),
+        index=0,
     )
+
+    if preset_choice == "✏️ 커스텀":
+        # 커스텀: 자유 편집
+        if "custom_prompt" not in st.session_state:
+            st.session_state.custom_prompt = "여기에 원하는 형식 프롬프트를 작성하세요."
+        format_prompt = st.text_area(
+            "커스텀 System Prompt",
+            value=st.session_state.custom_prompt,
+            height=400,
+            key="custom_prompt_editor",
+        )
+        st.session_state.custom_prompt = format_prompt
+    else:
+        # 프리셋: 내용 확인 가능 (수정 시 커스텀으로 전환 권장)
+        format_prompt = st.text_area(
+            "System Prompt (프리셋)",
+            value=PROMPT_PRESETS[preset_choice],
+            height=400,
+            key=f"preset_{preset_choice}",
+        )
 
 # ============================================================
 # 메인 영역
