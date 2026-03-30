@@ -180,13 +180,14 @@ def parse_prompts(text: str, expected_count: int) -> list:
     return [text]
 
 
-def generate_image_gc(client, model: str, prompt: str) -> bytes:
+def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1") -> bytes:
     """generate_content (IMAGE 모달리티)로 이미지 생성."""
     from google.genai import types
 
+    aspect_prompt = f"[aspect ratio: {aspect_ratio}] {prompt}"
     response = client.models.generate_content(
         model=model,
-        contents=prompt,
+        contents=aspect_prompt,
         config=types.GenerateContentConfig(
             response_modalities=["IMAGE"],
         ),
@@ -255,7 +256,48 @@ for _k, _val in _defaults.items():
 with st.sidebar:
     st.header("⚙️ 설정")
 
-    api_key = st.text_input("Gemini API Key", type="password")
+    # ---- API Key 관리 (최대 4개 저장) ----
+    MAX_KEYS = 4
+    if "saved_api_keys" not in st.session_state:
+        st.session_state.saved_api_keys = {}  # {이름: 키}
+
+    st.subheader("API Key 관리")
+
+    # 새 키 등록
+    with st.expander("🔑 API Key 등록 / 관리"):
+        new_key_name = st.text_input("키 이름 (예: 개인, 회사 등)", key="new_key_name")
+        new_key_value = st.text_input("API Key 값", type="password", key="new_key_value")
+        if st.button("💾 저장"):
+            if new_key_name and new_key_value:
+                if len(st.session_state.saved_api_keys) >= MAX_KEYS and new_key_name not in st.session_state.saved_api_keys:
+                    st.error(f"최대 {MAX_KEYS}개까지 저장 가능합니다. 기존 키를 삭제해주세요.")
+                else:
+                    st.session_state.saved_api_keys[new_key_name] = new_key_value
+                    st.success(f"'{new_key_name}' 저장 완료!")
+                    st.rerun()
+            else:
+                st.warning("이름과 키를 모두 입력해주세요.")
+
+        # 저장된 키 삭제
+        if st.session_state.saved_api_keys:
+            del_key = st.selectbox(
+                "삭제할 키",
+                ["선택..."] + list(st.session_state.saved_api_keys.keys()),
+                key="del_key_select",
+            )
+            if st.button("🗑️ 삭제") and del_key != "선택...":
+                del st.session_state.saved_api_keys[del_key]
+                st.rerun()
+
+    # 키 선택
+    if st.session_state.saved_api_keys:
+        key_options = list(st.session_state.saved_api_keys.keys())
+        selected_key_name = st.selectbox("사용할 API Key", key_options)
+        api_key = st.session_state.saved_api_keys[selected_key_name]
+        st.caption(f"🔑 `{selected_key_name}` 사용 중")
+    else:
+        api_key = st.text_input("Gemini API Key", type="password")
+        st.caption("💡 위 '등록/관리'에서 키를 저장하면 매번 입력할 필요가 없습니다.")
 
     st.divider()
     st.subheader("프롬프트 생성 (LLM)")
@@ -275,6 +317,16 @@ with st.sidebar:
     )
     image_model = IMAGE_MODELS[image_model_label]
     st.caption(f"모델 ID: `{image_model}`")
+
+    ASPECT_RATIOS = {
+        "1:1 (정사각형)": "1:1",
+        "16:9 (와이드)": "16:9",
+        "9:16 (세로)": "9:16",
+        "4:3 (표준)": "4:3",
+        "3:4 (세로 표준)": "3:4",
+    }
+    aspect_label = st.selectbox("이미지 비율", list(ASPECT_RATIOS.keys()), index=0)
+    aspect_ratio = ASPECT_RATIOS[aspect_label]
 
     st.divider()
     st.subheader("언어")
@@ -556,7 +608,7 @@ if st.session_state.prompts_ready:
 
                         try:
                             img_data = generate_image_gc(
-                                client, image_model, prompt
+                                client, image_model, prompt, aspect_ratio
                             )
 
                             if img_data:
