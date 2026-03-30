@@ -263,12 +263,18 @@ with st.sidebar:
 
     st.divider()
     st.subheader("이미지 생성")
-    image_model = st.text_input("이미지 모델명", placeholder="모델명을 입력하세요")
-    gen_method = st.radio(
-        "생성 방식",
-        ["generate_content", "generate_images"],
-        help="Gemini 모델 → generate_content / Imagen 모델 → generate_images",
+    IMAGE_MODELS = {
+        "나노바나나2 (Gemini 3.1 Flash Image)": "gemini-3.1-flash-image-preview",
+        "나노바나나 프로 (Gemini 3 Pro Image)": "gemini-3-pro-image-preview",
+    }
+    image_model_label = st.selectbox(
+        "이미지 모델",
+        list(IMAGE_MODELS.keys()),
+        index=0,
+        help="나노바나나2: 빠르고 저렴, 4K 지원 / 나노바나나 프로: 고품질, 텍스트 렌더링 우수",
     )
+    image_model = IMAGE_MODELS[image_model_label]
+    st.caption(f"모델 ID: `{image_model}`")
 
     st.divider()
     st.subheader("언어")
@@ -549,14 +555,9 @@ if st.session_state.prompts_ready:
                         )
 
                         try:
-                            if gen_method == "generate_content":
-                                img_data = generate_image_gc(
-                                    client, image_model, prompt
-                                )
-                            else:
-                                img_data = generate_image_imagen(
-                                    client, image_model, prompt
-                                )
+                            img_data = generate_image_gc(
+                                client, image_model, prompt
+                            )
 
                             if img_data:
                                 images.append((label, img_data))
