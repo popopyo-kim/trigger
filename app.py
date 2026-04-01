@@ -257,7 +257,7 @@ def segment_text(text: str, seconds: int, chars_per_sec: float = 4.5) -> list:
 
 def _split_by_meaning(text: str, target: int) -> list:
     """한국어 의미 단위(절/구)를 존중하여 분할.
-    우선순위: 쉼표 > 연결어미 > 조사+공백 > 공백"""
+    우선순위: 마침표/종결부호 > 종결어미 > 쉼표 > 연결어미 > 공백"""
     result = []
 
     while text:
@@ -273,27 +273,40 @@ def _split_by_meaning(text: str, target: int) -> list:
 
         best_pos = -1
 
-        # 1순위: 쉼표 뒤
-        for m in re.finditer(r",\s*", candidate_text):
+        # 1순위: 마침표/물음표/느낌표 뒤
+        for m in re.finditer(r"[.!?。！？]\s*", candidate_text):
             pos = m.end()
             if search_start <= pos <= search_end:
                 best_pos = pos
 
-        # 2순위: 한국어 연결어미/종결 패턴 뒤 + 공백
+        # 2순위: 한국어 종결어미 뒤 + 공백
         if best_pos < search_start:
-            patterns = [
-                r"(?:습니다|입니다|됩니다|합니다|했습니다|됐습니다|겠습니다)\s+",
-                r"(?:었고|했고|되고|지만|는데|으며|하며|으나|지요|거든요|잖아요)\s+",
-                r"(?:했죠|됐죠|이죠|인데요|하고요|니까요|대요|래요)\s+",
-                r"(?:하여|되어|으로|에서|까지|부터|에게|한테|처럼|만큼)\s+",
-            ]
-            for pat in patterns:
-                for m in re.finditer(pat, candidate_text):
-                    pos = m.end()
-                    if search_start <= pos <= search_end:
-                        best_pos = pos
+            for m in re.finditer(
+                r"(?:습니다|입니다|됩니다|합니다|했습니다|됐습니다|겠습니다|했죠|됐죠|이죠)\s+",
+                candidate_text
+            ):
+                pos = m.end()
+                if search_start <= pos <= search_end:
+                    best_pos = pos
 
-        # 3순위: 공백 (최후 수단)
+        # 3순위: 쉼표 뒤
+        if best_pos < search_start:
+            for m in re.finditer(r",\s*", candidate_text):
+                pos = m.end()
+                if search_start <= pos <= search_end:
+                    best_pos = pos
+
+        # 4순위: 연결어미 뒤 + 공백
+        if best_pos < search_start:
+            for m in re.finditer(
+                r"(?:었고|했고|되고|지만|는데|으며|하며|으나|거든요|잖아요|인데요|니까요)\s+",
+                candidate_text
+            ):
+                pos = m.end()
+                if search_start <= pos <= search_end:
+                    best_pos = pos
+
+        # 5순위: 공백 (최후 수단)
         if best_pos < search_start:
             pos = candidate_text.rfind(" ", search_start, search_end)
             if pos > 0:
@@ -1142,19 +1155,35 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                             i + 1, parts[1].strip()
                         )
                     else:
-                        # 의미 단위에서 분할 시도
+                        # 마침표/종결어미 기준 분할
                         mid = len(txt) // 2
-                        # 쉼표 근처 찾기
-                        comma_pos = txt.rfind(",", 0, mid + 10)
-                        if comma_pos > len(txt) * 0.3:
-                            mid = comma_pos + 1
-                        else:
+                        split_pos = -1
+                        # 1순위: 마침표/물음표/느낌표 뒤
+                        for m in re.finditer(r"[.!?。！？]\s*", txt):
+                            pos = m.end()
+                            if pos <= mid + 15:
+                                split_pos = pos
+                        # 2순위: 종결어미 뒤 공백
+                        if split_pos < len(txt) * 0.2:
+                            for m in re.finditer(
+                                r"(?:습니다|입니다|됩니다|합니다|했습니다|됐습니다|겠습니다|었고|했고|했죠|됐죠|이죠|는데요|거든요|잖아요)\s+",
+                                txt
+                            ):
+                                pos = m.end()
+                                if pos <= mid + 15:
+                                    split_pos = pos
+                        # 3순위: 쉼표 뒤
+                        if split_pos < len(txt) * 0.2:
+                            comma_pos = txt.rfind(",", 0, mid + 10)
+                            if comma_pos > len(txt) * 0.2:
+                                split_pos = comma_pos + 1
+                        # 최후: 공백
+                        if split_pos < len(txt) * 0.2:
                             sp = txt.rfind(" ", 0, mid + 5)
-                            if sp > 0:
-                                mid = sp
-                        st.session_state.body_segments[i] = txt[:mid].strip()
+                            split_pos = sp if sp > 0 else mid
+                        st.session_state.body_segments[i] = txt[:split_pos].strip()
                         st.session_state.body_segments.insert(
-                            i + 1, txt[mid:].strip()
+                            i + 1, txt[split_pos:].strip()
                         )
                     st.session_state.v += 1
                     st.rerun()
