@@ -538,7 +538,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("프롬프트 생성 (LLM)")
-    prompt_model = st.text_input("모델명", value="gemini-2.5-flash-preview-05-20")
+    prompt_model = st.text_input("모델명", value="gemini-2.5-flash")
 
     st.divider()
     st.subheader("이미지 생성")
