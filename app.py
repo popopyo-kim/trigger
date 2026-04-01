@@ -1105,20 +1105,88 @@ if st.session_state.intro_segments or st.session_state.body_segments:
     # ===== 본문 =====
     if st.session_state.body_segments:
         st.subheader("📌 본문")
+        st.caption(
+            "💡 텍스트 안에 `|` 를 넣고 ✂️ 분할 버튼을 누르면 그 위치에서 컷이 나뉩니다."
+        )
         ver = st.session_state.v
 
         for i in range(len(st.session_state.body_segments)):
             seg = st.session_state.body_segments[i]
-            val = st.text_area(
-                f"본문 컷 {i + 1}",
-                value=seg,
-                height=68,
-                key=f"be_{i}_{ver}",
-            )
-            st.session_state.body_segments[i] = val
-            chars = len(val)
-            secs = chars / 4.5
-            st.caption(f"{chars}글자 / ~{secs:.1f}초")
+
+            c_text, c_info = st.columns([5, 1])
+
+            with c_text:
+                val = st.text_area(
+                    f"본문 컷 {i + 1}",
+                    value=seg,
+                    height=68,
+                    key=f"be_{i}_{ver}",
+                )
+                st.session_state.body_segments[i] = val
+
+            with c_info:
+                chars = len(val)
+                secs = chars / 4.5
+                st.info(f"{chars}글자 / ~{secs:.1f}초")
+
+            # 액션 버튼
+            bc1, bc2, bc3, _ = st.columns(4)
+
+            with bc1:
+                if st.button("✂️ 분할", key=f"bs_{i}_{ver}"):
+                    txt = st.session_state.body_segments[i]
+                    if "|" in txt:
+                        parts = txt.split("|", 1)
+                        st.session_state.body_segments[i] = parts[0].strip()
+                        st.session_state.body_segments.insert(
+                            i + 1, parts[1].strip()
+                        )
+                    else:
+                        # 의미 단위에서 분할 시도
+                        mid = len(txt) // 2
+                        # 쉼표 근처 찾기
+                        comma_pos = txt.rfind(",", 0, mid + 10)
+                        if comma_pos > len(txt) * 0.3:
+                            mid = comma_pos + 1
+                        else:
+                            sp = txt.rfind(" ", 0, mid + 5)
+                            if sp > 0:
+                                mid = sp
+                        st.session_state.body_segments[i] = txt[:mid].strip()
+                        st.session_state.body_segments.insert(
+                            i + 1, txt[mid:].strip()
+                        )
+                    st.session_state.v += 1
+                    st.rerun()
+
+            with bc2:
+                if st.button("🗑️ 삭제", key=f"bd_{i}_{ver}"):
+                    st.session_state.body_segments.pop(i)
+                    st.session_state.v += 1
+                    st.rerun()
+
+            with bc3:
+                can_merge = i < len(st.session_state.body_segments) - 1
+                if st.button(
+                    "⬇️ 병합", key=f"bm_{i}_{ver}", disabled=not can_merge
+                ):
+                    if can_merge:
+                        merged = (
+                            st.session_state.body_segments[i]
+                            + " "
+                            + st.session_state.body_segments[i + 1]
+                        )
+                        st.session_state.body_segments[i] = merged
+                        st.session_state.body_segments.pop(i + 1)
+                        st.session_state.v += 1
+                        st.rerun()
+
+            st.markdown("---")
+
+        if st.button("➕ 본문 컷 추가"):
+            st.session_state.body_segments.append("")
+            st.session_state.v += 1
+            st.rerun()
 
 # ────────────────────────────────────────────────────────────
 # 3단계: 이미지 프롬프트 생성
