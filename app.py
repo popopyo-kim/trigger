@@ -120,7 +120,7 @@ EMPTY_CHARACTER_PROFILE = {
 }
 
 
-def analyze_character_image(client, model: str, image_bytes: bytes) -> dict:
+def analyze_character_image(client, model: str, image_bytes: bytes, mime_type: str = "image/png") -> dict:
     """참조 이미지를 Gemini로 분석하여 캐릭터 프로필 JSON 반환."""
     from google.genai import types
     import json as _json
@@ -146,7 +146,7 @@ def analyze_character_image(client, model: str, image_bytes: bytes) -> dict:
     response = client.models.generate_content(
         model=model,
         contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             analysis_prompt,
         ],
     )
@@ -688,23 +688,37 @@ with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
     # 참조 이미지로 자동 분석
     ref_image = st.file_uploader("참조 이미지 업로드 (자동 분석)", type=["png", "jpg", "jpeg", "webp"], key=f"ref_img_{char_v}")
 
-    if ref_image and new_char_name:
-        if st.button("🔍 이미지 분석 + 캐릭터 등록", type="primary"):
-            if not api_key:
-                st.error("API Key를 먼저 설정해주세요.")
-            else:
-                try:
-                    with st.spinner(f"'{new_char_name}' 캐릭터 분석 중..."):
-                        client = get_gemini_client(api_key)
-                        img_bytes = ref_image.read()
-                        profile = analyze_character_image(client, prompt_model, img_bytes)
-                        profile["name"] = new_char_name
-                        st.session_state.characters.append(profile)
-                        st.session_state.char_v += 1
-                        st.success(f"'{new_char_name}' 분석 완료! 아래에서 결과를 확인/수정하세요.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"분석 실패: {e}")
+    if ref_image:
+        st.image(ref_image, caption="업로드된 참조 이미지", width=200)
+
+    if st.button("🔍 이미지 분석 + 캐릭터 등록", type="primary"):
+        if not new_char_name:
+            st.error("캐릭터 이름을 입력해주세요.")
+        elif not ref_image:
+            st.error("참조 이미지를 업로드해주세요.")
+        elif not api_key:
+            st.error("사이드바에서 API Key를 먼저 설정해주세요.")
+        else:
+            try:
+                with st.spinner(f"'{new_char_name}' 캐릭터 분석 중..."):
+                    client = get_gemini_client(api_key)
+                    img_bytes = ref_image.getvalue()
+                    # MIME 타입 결정
+                    fname = ref_image.name.lower()
+                    if fname.endswith(".jpg") or fname.endswith(".jpeg"):
+                        mime = "image/jpeg"
+                    elif fname.endswith(".webp"):
+                        mime = "image/webp"
+                    else:
+                        mime = "image/png"
+                    profile = analyze_character_image(client, prompt_model, img_bytes, mime)
+                    profile["name"] = new_char_name
+                    st.session_state.characters.append(profile)
+                    st.session_state.char_v += 1
+                    st.success(f"'{new_char_name}' 분석 완료! 아래에서 결과를 확인/수정하세요.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"분석 실패: {e}")
 
     if add_manual and new_char_name:
         new_profile = copy.deepcopy(EMPTY_CHARACTER_PROFILE)
