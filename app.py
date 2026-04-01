@@ -1107,11 +1107,40 @@ if st.session_state.prompts_ready:
     if st.session_state.images_ready and st.session_state.images_dict:
         st.subheader("생성된 이미지")
 
+        def _swap_scene(prefix, i, j):
+            """씬 i와 j의 세그먼트, 프롬프트, 이미지를 교환"""
+            if prefix == "intro":
+                segs = st.session_state.intro_segments
+                prompts = st.session_state.intro_prompts
+                checks = st.session_state.intro_checks
+            else:
+                segs = st.session_state.body_segments
+                prompts = st.session_state.body_prompts
+                checks = st.session_state.body_checks
+            # 세그먼트, 프롬프트, 체크 교환
+            segs[i], segs[j] = segs[j], segs[i]
+            prompts[i], prompts[j] = prompts[j], prompts[i]
+            checks[i], checks[j] = checks[j], checks[i]
+            # 이미지 교환
+            label_i = f"{prefix}_{i + 1:03d}"
+            label_j = f"{prefix}_{j + 1:03d}"
+            img_i = st.session_state.images_dict.get(label_i)
+            img_j = st.session_state.images_dict.get(label_j)
+            if img_i is not None and img_j is not None:
+                st.session_state.images_dict[label_i], st.session_state.images_dict[label_j] = img_j, img_i
+            elif img_i is not None:
+                st.session_state.images_dict[label_j] = img_i
+                del st.session_state.images_dict[label_i]
+            elif img_j is not None:
+                st.session_state.images_dict[label_i] = img_j
+                del st.session_state.images_dict[label_j]
+
         def _show_images(section_label, prefix, prompts_list, segments_list):
             section_imgs = {k: v for k, v in st.session_state.images_dict.items() if k.startswith(prefix)}
             if not section_imgs and not prompts_list:
                 return
             st.markdown(f"**📌 {section_label}**")
+            total = len(prompts_list)
             for i, p in enumerate(prompts_list):
                 label = f"{prefix}_{i + 1:03d}"
                 # 해당 씬의 대본 텍스트
@@ -1120,7 +1149,21 @@ if st.session_state.prompts_ready:
                 secs = chars / 4.5
 
                 st.markdown(f"---")
-                st.markdown(f"**씬 {i + 1}** — {chars}글자 / ~{secs:.1f}초")
+                # 씬 헤더 + 순서 이동 버튼
+                hdr_col, up_col, down_col = st.columns([8, 1, 1])
+                with hdr_col:
+                    st.markdown(f"**씬 {i + 1}** — {chars}글자 / ~{secs:.1f}초")
+                with up_col:
+                    if i > 0:
+                        if st.button("⬆️", key=f"up_{prefix}_{i}"):
+                            _swap_scene(prefix, i, i - 1)
+                            st.rerun()
+                with down_col:
+                    if i < total - 1:
+                        if st.button("⬇️", key=f"down_{prefix}_{i}"):
+                            _swap_scene(prefix, i, i + 1)
+                            st.rerun()
+
                 if script_text.strip():
                     st.info(f"📝 {script_text.strip()}")
 
