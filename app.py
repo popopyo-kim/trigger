@@ -1107,44 +1107,55 @@ if st.session_state.prompts_ready:
     if st.session_state.images_ready and st.session_state.images_dict:
         st.subheader("생성된 이미지")
 
-        def _show_images(section_label, prefix, prompts_list):
+        def _show_images(section_label, prefix, prompts_list, segments_list):
             section_imgs = {k: v for k, v in st.session_state.images_dict.items() if k.startswith(prefix)}
             if not section_imgs and not prompts_list:
                 return
             st.markdown(f"**📌 {section_label}**")
-            cols = st.columns(min(3, max(1, len(prompts_list))))
             for i, p in enumerate(prompts_list):
                 label = f"{prefix}_{i + 1:03d}"
-                with cols[i % len(cols)]:
+                # 해당 씬의 대본 텍스트
+                script_text = segments_list[i] if i < len(segments_list) else ""
+                chars = len(script_text)
+                secs = chars / 4.5
+
+                st.markdown(f"---")
+                st.markdown(f"**씬 {i + 1}** — {chars}글자 / ~{secs:.1f}초")
+                if script_text.strip():
+                    st.info(f"📝 {script_text.strip()}")
+
+                img_col, ctrl_col = st.columns([3, 1])
+                with img_col:
                     if label in st.session_state.images_dict:
                         st.image(st.session_state.images_dict[label], caption=label, use_container_width=True)
-                        dl_col, regen_col = st.columns(2)
-                        with dl_col:
-                            st.download_button(
-                                f"📥 저장",
-                                data=st.session_state.images_dict[label],
-                                file_name=f"{label}.png",
-                                mime="image/png",
-                                key=f"dl_{label}",
-                            )
-                        with regen_col:
-                            if st.button(f"🔄 재생성", key=f"regen_{label}"):
-                                try:
-                                    client = get_gemini_client(api_key)
-                                    with st.spinner(f"{label} 재생성 중..."):
-                                        new_img = generate_image_gc(client, image_model, p, aspect_ratio)
-                                    if new_img:
-                                        st.session_state.images_dict[label] = new_img
-                                        st.rerun()
-                                    else:
-                                        st.warning("재생성 결과 없음")
-                                except Exception as e:
-                                    st.error(f"재생성 실패: {e}")
                     else:
                         st.info(f"{label}\n(미생성)")
+                with ctrl_col:
+                    if label in st.session_state.images_dict:
+                        st.download_button(
+                            f"📥 저장",
+                            data=st.session_state.images_dict[label],
+                            file_name=f"{label}.png",
+                            mime="image/png",
+                            key=f"dl_{label}",
+                        )
+                        if st.button(f"🔄 재생성", key=f"regen_{label}"):
+                            try:
+                                client = get_gemini_client(api_key)
+                                with st.spinner(f"{label} 재생성 중..."):
+                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio)
+                                if new_img:
+                                    st.session_state.images_dict[label] = new_img
+                                    st.rerun()
+                                else:
+                                    st.warning("재생성 결과 없음")
+                            except Exception as e:
+                                st.error(f"재생성 실패: {e}")
+                    with st.expander("프롬프트 보기"):
+                        st.code(p, language=None)
 
-        _show_images("도입부", "intro", st.session_state.intro_prompts)
-        _show_images("본문", "body", st.session_state.body_prompts)
+        _show_images("도입부", "intro", st.session_state.intro_prompts, st.session_state.intro_segments)
+        _show_images("본문", "body", st.session_state.body_prompts, st.session_state.body_segments)
 
         # 전체 ZIP 다운로드
         if st.session_state.images_dict:
