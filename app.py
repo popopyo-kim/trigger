@@ -339,9 +339,42 @@ def parse_prompts(text: str, expected_count: int) -> list:
     return [text]
 
 
-def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1", negative: str = "", seed: int = None) -> bytes:
-    """generate_content (IMAGE 모달리티)로 이미지 생성."""
+def _call_image_api(client, model, prompt_text, config_kwargs):
+    """이미지 API 단일 호출."""
     from google.genai import types
+
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt_text,
+        config=types.GenerateContentConfig(**config_kwargs),
+    )
+    for part in response.candidates[0].content.parts:
+        if part.inline_data is not None:
+            data = part.inline_data.data
+            if isinstance(data, str):
+                return base64.b64decode(data)
+            return data
+    return None
+
+
+# 우회 프롬프트 변형 패턴
+_BYPASS_PREFIXES = [
+    "Illustration of: ",
+    "Artistic depiction: ",
+    "Visual scene: ",
+]
+
+
+def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1",
+                       negative: str = "", seed: int = None,
+                       max_retries: int = 3, bypass: bool = True) -> tuple:
+    """generate_content (IMAGE 모달리티)로 이미지 생성.
+
+    Returns: (image_bytes, status_msg)
+        image_bytes: 이미지 바이트 또는 None
+        status_msg: 생성 과정 메시지 (재시도/우회 정보)
+    """
+    import time as _time
 
     aspect_prompt = f"[aspect ratio: {aspect_ratio}] {prompt}"
     if negative.strip():
@@ -353,19 +386,37 @@ def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1"
     if seed is not None:
         config_kwargs["seed"] = seed
 
-    response = client.models.generate_content(
-        model=model,
-        contents=aspect_prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
+    # 1차: 일반 재시도 (최대 max_retries회)
+    last_error = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = _call_image_api(client, model, aspect_prompt, config_kwargs)
+            if result:
+                if attempt > 1:
+                    return result, f"✅ {attempt}차 시도에서 성공"
+                return result, ""
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                _time.sleep(min(2 ** attempt, 8))  # 2s, 4s, 8s
 
-    for part in response.candidates[0].content.parts:
-        if part.inline_data is not None:
-            data = part.inline_data.data
-            if isinstance(data, str):
-                return base64.b64decode(data)
-            return data
-    return None
+    # 2차: 우회 생성 — 프롬프트 변형하여 재시도
+    if bypass:
+        for i, prefix in enumerate(_BYPASS_PREFIXES):
+            bypass_prompt = f"[aspect ratio: {aspect_ratio}] {prefix}{prompt}"
+            if negative.strip():
+                bypass_prompt += f" --no {negative.strip()}"
+            try:
+                result = _call_image_api(client, model, bypass_prompt, config_kwargs)
+                if result:
+                    return result, f"🔄 우회 생성 성공 (변형 {i + 1})"
+            except Exception:
+                _time.sleep(2)
+
+    error_msg = f"❌ {max_retries}회 재시도 + 우회 모두 실패"
+    if last_error:
+        error_msg += f": {last_error}"
+    return None, error_msg
 
 
 def generate_image_imagen(client, model: str, prompt: str) -> bytes:
@@ -1148,12 +1199,17 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         try:
                             client = get_gemini_client(api_key)
                             st.session_state.api_usage["image_calls"] += 1
-                            with st.spinner("테스트 생성 중..."):
-                                test_img = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt, seed_value)
+                            with st.spinner("테스트 생성 중... (실패 시 자동 재시도)"):
+                                test_img, test_msg = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt, seed_value)
                             if test_img:
                                 st.session_state.api_usage["image_success"] += 1
                                 st.session_state.preview_images[preview_key] = test_img
+                                if test_msg:
+                                    st.toast(test_msg)
                                 st.rerun()
+                            else:
+                                st.session_state.api_usage["image_fail"] += 1
+                                st.error(test_msg or "이미지 생성 결과 없음")
                         except Exception as e:
                             st.session_state.api_usage["image_fail"] += 1
                             st.error(f"실패: {e}")
@@ -1250,15 +1306,17 @@ if st.session_state.prompts_ready:
 
                         try:
                             st.session_state.api_usage["image_calls"] += 1
-                            img_data = generate_image_gc(
+                            img_data, gen_msg = generate_image_gc(
                                 client, image_model, prompt, aspect_ratio, negative_prompt, seed_value
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
                                 st.session_state.api_usage["image_success"] += 1
                                 success_count += 1
+                                if gen_msg:
+                                    st.caption(f"  {label}: {gen_msg}")
                             else:
-                                st.warning(f"{label}: 이미지 생성 결과 없음")
+                                st.warning(f"{label}: {gen_msg or '이미지 생성 결과 없음'}")
                                 st.session_state.api_usage["image_fail"] += 1
                                 fail_count += 1
                         except Exception as e:
@@ -1368,14 +1426,16 @@ if st.session_state.prompts_ready:
                                     st.session_state.images_dict[label]
                                 )
                                 st.session_state.api_usage["image_calls"] += 1
-                                with st.spinner(f"{label} 재생성 중..."):
-                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt, seed_value)
+                                with st.spinner(f"{label} 재생성 중... (실패 시 자동 재시도)"):
+                                    new_img, regen_msg = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt, seed_value)
                                 if new_img:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.images_dict[label] = new_img
+                                    if regen_msg:
+                                        st.toast(regen_msg)
                                     st.rerun()
                                 else:
-                                    st.warning("재생성 결과 없음")
+                                    st.warning(regen_msg or "재생성 결과 없음")
                             except Exception as e:
                                 st.error(f"재생성 실패: {e}")
                         # 이전 버전 비교 뷰
