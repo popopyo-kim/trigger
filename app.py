@@ -339,19 +339,24 @@ def parse_prompts(text: str, expected_count: int) -> list:
     return [text]
 
 
-def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1", negative: str = "") -> bytes:
+def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1", negative: str = "", seed: int = None) -> bytes:
     """generate_content (IMAGE 모달리티)로 이미지 생성."""
     from google.genai import types
 
     aspect_prompt = f"[aspect ratio: {aspect_ratio}] {prompt}"
     if negative.strip():
         aspect_prompt += f" --no {negative.strip()}"
+    if seed is not None:
+        aspect_prompt += f" --seed {seed}"
+
+    config_kwargs = {"response_modalities": ["IMAGE"]}
+    if seed is not None:
+        config_kwargs["seed"] = seed
+
     response = client.models.generate_content(
         model=model,
         contents=aspect_prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-        ),
+        config=types.GenerateContentConfig(**config_kwargs),
     )
 
     for part in response.candidates[0].content.parts:
@@ -587,6 +592,13 @@ with st.sidebar:
     }
     aspect_label = st.selectbox("이미지 비율", list(ASPECT_RATIOS.keys()), index=0)
     aspect_ratio = ASPECT_RATIOS[aspect_label]
+
+    # 시드(Seed) 옵션
+    use_seed = st.checkbox("🎲 시드(Seed) 고정", value=False, help="동일한 시드로 같은 프롬프트를 재현")
+    if use_seed:
+        seed_value = st.number_input("시드 값", min_value=0, max_value=2147483647, value=42, step=1)
+    else:
+        seed_value = None
 
     st.divider()
     st.subheader("네거티브 프롬프트")
@@ -1137,7 +1149,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                             client = get_gemini_client(api_key)
                             st.session_state.api_usage["image_calls"] += 1
                             with st.spinner("테스트 생성 중..."):
-                                test_img = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt)
+                                test_img = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt, seed_value)
                             if test_img:
                                 st.session_state.api_usage["image_success"] += 1
                                 st.session_state.preview_images[preview_key] = test_img
@@ -1239,7 +1251,7 @@ if st.session_state.prompts_ready:
                         try:
                             st.session_state.api_usage["image_calls"] += 1
                             img_data = generate_image_gc(
-                                client, image_model, prompt, aspect_ratio, negative_prompt
+                                client, image_model, prompt, aspect_ratio, negative_prompt, seed_value
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
@@ -1357,7 +1369,7 @@ if st.session_state.prompts_ready:
                                 )
                                 st.session_state.api_usage["image_calls"] += 1
                                 with st.spinner(f"{label} 재생성 중..."):
-                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt)
+                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt, seed_value)
                                 if new_img:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.images_dict[label] = new_img
