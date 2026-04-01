@@ -421,6 +421,13 @@ _defaults = {
     "images_ready": False,
     "characters": [],  # 캐릭터 프로필 리스트
     "char_v": 0,  # 캐릭터 UI 버전
+    "api_usage": {  # API 사용량 추적
+        "prompt_calls": 0,
+        "image_calls": 0,
+        "image_success": 0,
+        "image_fail": 0,
+        "char_analysis_calls": 0,
+    },
 }
 for _k, _val in _defaults.items():
     if _k not in st.session_state:
@@ -672,6 +679,27 @@ with st.sidebar:
     </style>
     """, unsafe_allow_html=True)
 
+    # API 사용량 표시
+    st.divider()
+    st.subheader("📊 API 사용량")
+    usage = st.session_state.api_usage
+    st.markdown(f"""
+    | 항목 | 횟수 |
+    |------|------|
+    | 프롬프트 생성 | {usage['prompt_calls']}회 |
+    | 이미지 생성 요청 | {usage['image_calls']}회 |
+    | 이미지 성공 | {usage['image_success']}장 |
+    | 이미지 실패 | {usage['image_fail']}장 |
+    | 캐릭터 분석 | {usage['char_analysis_calls']}회 |
+    """)
+    if st.button("🔄 사용량 초기화", key="reset_usage"):
+        st.session_state.api_usage = {
+            "prompt_calls": 0, "image_calls": 0,
+            "image_success": 0, "image_fail": 0,
+            "char_analysis_calls": 0,
+        }
+        st.rerun()
+
 # ============================================================
 # 메인 영역
 # ============================================================
@@ -786,6 +814,7 @@ with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
                         mime = "image/webp"
                     else:
                         mime = "image/png"
+                    st.session_state.api_usage["char_analysis_calls"] += 1
                     profile = analyze_character_image(client, prompt_model, img_bytes, mime)
                     profile["name"] = new_char_name
                     st.session_state.characters.append(profile)
@@ -1045,6 +1074,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                     else:
                         st.session_state.body_prompts = []
 
+                st.session_state.api_usage["prompt_calls"] += 1
                 st.session_state.prompts_ready = True
                 st.session_state.images_ready = False
                 st.session_state.images = []
@@ -1105,12 +1135,15 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                     else:
                         try:
                             client = get_gemini_client(api_key)
+                            st.session_state.api_usage["image_calls"] += 1
                             with st.spinner("테스트 생성 중..."):
                                 test_img = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt)
                             if test_img:
+                                st.session_state.api_usage["image_success"] += 1
                                 st.session_state.preview_images[preview_key] = test_img
                                 st.rerun()
                         except Exception as e:
+                            st.session_state.api_usage["image_fail"] += 1
                             st.error(f"실패: {e}")
                 if preview_key in st.session_state.preview_images:
                     st.image(st.session_state.preview_images[preview_key], width=150)
@@ -1204,17 +1237,21 @@ if st.session_state.prompts_ready:
                         status_text.caption(f"⏱️ 경과: {elapsed_str} | 남은 예상: {eta_str} | ✅ {success_count} ❌ {fail_count}")
 
                         try:
+                            st.session_state.api_usage["image_calls"] += 1
                             img_data = generate_image_gc(
                                 client, image_model, prompt, aspect_ratio, negative_prompt
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
+                                st.session_state.api_usage["image_success"] += 1
                                 success_count += 1
                             else:
                                 st.warning(f"{label}: 이미지 생성 결과 없음")
+                                st.session_state.api_usage["image_fail"] += 1
                                 fail_count += 1
                         except Exception as e:
                             st.warning(f"{label} 생성 실패: {e}")
+                            st.session_state.api_usage["image_fail"] += 1
                             fail_count += 1
 
                     total_elapsed = _time.time() - start_time
@@ -1318,9 +1355,11 @@ if st.session_state.prompts_ready:
                                 st.session_state.images_history[label].append(
                                     st.session_state.images_dict[label]
                                 )
+                                st.session_state.api_usage["image_calls"] += 1
                                 with st.spinner(f"{label} 재생성 중..."):
                                     new_img = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt)
                                 if new_img:
+                                    st.session_state.api_usage["image_success"] += 1
                                     st.session_state.images_dict[label] = new_img
                                     st.rerun()
                                 else:
