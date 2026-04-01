@@ -1063,7 +1063,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                     st.info(f"{chars}글자 / ~{secs:.1f}초")
 
             # 액션 버튼
-            bc1, bc2, bc3, _ = st.columns(4)
+            bc1, bc2, bc3, bc4 = st.columns(4)
 
             with bc1:
                 if st.button("✂️ 분할", key=f"is_{i}_{ver}"):
@@ -1108,6 +1108,69 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         st.session_state.v += 1
                         st.rerun()
 
+            with bc4:
+                label = f"intro_{i + 1:03d}"
+                has_image = label in st.session_state.get("images_dict", {})
+                btn_label = "🔄 다시 생성" if has_image else "🎯 생성"
+                if st.button(btn_label, key=f"igen_{i}_{ver}"):
+                    if not api_key:
+                        st.error("API Key를 입력해주세요.")
+                    elif not val.strip():
+                        st.warning("대본이 비어있습니다.")
+                    else:
+                        try:
+                            client = get_gemini_client(api_key)
+                            char_injection = build_character_prompt_injection(st.session_state.characters)
+                            full_sp = format_prompt + char_injection
+                            lang_inst = LANGUAGE_MAP[language]
+
+                            with st.spinner(f"도입부 컷 {i+1} 프롬프트 생성 중..."):
+                                prompts = generate_prompts(client, prompt_model, full_sp, [val], "도입부", lang_inst)
+                            if prompts:
+                                # 프롬프트 리스트 확장/갱신
+                                while len(st.session_state.intro_prompts) <= i:
+                                    st.session_state.intro_prompts.append("")
+                                st.session_state.intro_prompts[i] = prompts[0]
+                                st.session_state.api_usage["prompt_calls"] += 1
+
+                                with st.spinner(f"도입부 컷 {i+1} 이미지 생성 중..."):
+                                    st.session_state.api_usage["image_calls"] += 1
+                                    img_data, gen_msg = generate_image_gc(
+                                        client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
+                                    )
+                                if img_data:
+                                    if "images_dict" not in st.session_state:
+                                        st.session_state.images_dict = {}
+                                    # 기존 이미지 히스토리 보관
+                                    if has_image:
+                                        if "images_history" not in st.session_state:
+                                            st.session_state.images_history = {}
+                                        if label not in st.session_state.images_history:
+                                            st.session_state.images_history[label] = []
+                                        st.session_state.images_history[label].append(
+                                            st.session_state.images_dict[label]
+                                        )
+                                    st.session_state.images_dict[label] = img_data
+                                    st.session_state.api_usage["image_success"] += 1
+                                    st.session_state.prompts_ready = True
+                                    st.session_state.images_ready = True
+                                    if gen_msg:
+                                        st.toast(gen_msg)
+                                    st.rerun()
+                                else:
+                                    st.session_state.api_usage["image_fail"] += 1
+                                    st.warning(gen_msg or "이미지 생성 실패")
+                        except Exception as e:
+                            st.error(f"생성 실패: {e}")
+
+            # 개별 생성 결과 미리보기
+            label = f"intro_{i + 1:03d}"
+            if label in st.session_state.get("images_dict", {}):
+                with st.expander(f"🖼️ 도입부 컷 {i+1} 이미지", expanded=False):
+                    st.image(st.session_state.images_dict[label], use_container_width=True)
+                    if i < len(st.session_state.get("intro_prompts", [])):
+                        st.caption(f"프롬프트: {st.session_state.intro_prompts[i][:100]}...")
+
             st.markdown("---")
 
         if st.button("➕ 도입부 컷 추가"):
@@ -1143,7 +1206,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                 st.info(f"{chars}글자 / ~{secs:.1f}초")
 
             # 액션 버튼
-            bc1, bc2, bc3, _ = st.columns(4)
+            bc1, bc2, bc3, bc4 = st.columns(4)
 
             with bc1:
                 if st.button("✂️ 분할", key=f"bs_{i}_{ver}"):
@@ -1209,6 +1272,67 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         st.session_state.body_segments.pop(i + 1)
                         st.session_state.v += 1
                         st.rerun()
+
+            with bc4:
+                label = f"body_{i + 1:03d}"
+                has_image = label in st.session_state.get("images_dict", {})
+                btn_label = "🔄 다시 생성" if has_image else "🎯 생성"
+                if st.button(btn_label, key=f"bgen_{i}_{ver}"):
+                    if not api_key:
+                        st.error("API Key를 입력해주세요.")
+                    elif not val.strip():
+                        st.warning("대본이 비어있습니다.")
+                    else:
+                        try:
+                            client = get_gemini_client(api_key)
+                            char_injection = build_character_prompt_injection(st.session_state.characters)
+                            full_sp = format_prompt + char_injection
+                            lang_inst = LANGUAGE_MAP[language]
+
+                            with st.spinner(f"본문 컷 {i+1} 프롬프트 생성 중..."):
+                                prompts = generate_prompts(client, prompt_model, full_sp, [val], "본문", lang_inst)
+                            if prompts:
+                                while len(st.session_state.body_prompts) <= i:
+                                    st.session_state.body_prompts.append("")
+                                st.session_state.body_prompts[i] = prompts[0]
+                                st.session_state.api_usage["prompt_calls"] += 1
+
+                                with st.spinner(f"본문 컷 {i+1} 이미지 생성 중..."):
+                                    st.session_state.api_usage["image_calls"] += 1
+                                    img_data, gen_msg = generate_image_gc(
+                                        client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
+                                    )
+                                if img_data:
+                                    if "images_dict" not in st.session_state:
+                                        st.session_state.images_dict = {}
+                                    if has_image:
+                                        if "images_history" not in st.session_state:
+                                            st.session_state.images_history = {}
+                                        if label not in st.session_state.images_history:
+                                            st.session_state.images_history[label] = []
+                                        st.session_state.images_history[label].append(
+                                            st.session_state.images_dict[label]
+                                        )
+                                    st.session_state.images_dict[label] = img_data
+                                    st.session_state.api_usage["image_success"] += 1
+                                    st.session_state.prompts_ready = True
+                                    st.session_state.images_ready = True
+                                    if gen_msg:
+                                        st.toast(gen_msg)
+                                    st.rerun()
+                                else:
+                                    st.session_state.api_usage["image_fail"] += 1
+                                    st.warning(gen_msg or "이미지 생성 실패")
+                        except Exception as e:
+                            st.error(f"생성 실패: {e}")
+
+            # 개별 생성 결과 미리보기
+            label = f"body_{i + 1:03d}"
+            if label in st.session_state.get("images_dict", {}):
+                with st.expander(f"🖼️ 본문 컷 {i+1} 이미지", expanded=False):
+                    st.image(st.session_state.images_dict[label], use_container_width=True)
+                    if i < len(st.session_state.get("body_prompts", [])):
+                        st.caption(f"프롬프트: {st.session_state.body_prompts[i][:100]}...")
 
             st.markdown("---")
 
