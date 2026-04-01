@@ -339,11 +339,13 @@ def parse_prompts(text: str, expected_count: int) -> list:
     return [text]
 
 
-def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1") -> bytes:
+def generate_image_gc(client, model: str, prompt: str, aspect_ratio: str = "1:1", negative: str = "") -> bytes:
     """generate_content (IMAGE 모달리티)로 이미지 생성."""
     from google.genai import types
 
     aspect_prompt = f"[aspect ratio: {aspect_ratio}] {prompt}"
+    if negative.strip():
+        aspect_prompt += f" --no {negative.strip()}"
     response = client.models.generate_content(
         model=model,
         contents=aspect_prompt,
@@ -564,6 +566,16 @@ with st.sidebar:
     }
     aspect_label = st.selectbox("이미지 비율", list(ASPECT_RATIOS.keys()), index=0)
     aspect_ratio = ASPECT_RATIOS[aspect_label]
+
+    st.divider()
+    st.subheader("네거티브 프롬프트")
+    negative_prompt = st.text_area(
+        "제외할 요소",
+        value="text, letters, words, watermark, signature, blurry, low quality, multiple panels, split frames, speech bubbles",
+        height=100,
+        key="negative_prompt",
+        help="이미지에서 제외할 요소를 쉼표로 구분하여 입력",
+    )
 
     st.divider()
     st.subheader("언어")
@@ -1031,7 +1043,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         try:
                             client = get_gemini_client(api_key)
                             with st.spinner("테스트 생성 중..."):
-                                test_img = generate_image_gc(client, image_model, val, aspect_ratio)
+                                test_img = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt)
                             if test_img:
                                 st.session_state.preview_images[preview_key] = test_img
                                 st.rerun()
@@ -1108,7 +1120,7 @@ if st.session_state.prompts_ready:
                         )
                         try:
                             img_data = generate_image_gc(
-                                client, image_model, prompt, aspect_ratio
+                                client, image_model, prompt, aspect_ratio, negative_prompt
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
@@ -1213,7 +1225,7 @@ if st.session_state.prompts_ready:
                                     st.session_state.images_dict[label]
                                 )
                                 with st.spinner(f"{label} 재생성 중..."):
-                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio)
+                                    new_img = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt)
                                 if new_img:
                                     st.session_state.images_dict[label] = new_img
                                     st.rerun()
