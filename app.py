@@ -389,6 +389,20 @@ def create_zip(images: list) -> bytes:
     return buf.getvalue()
 
 
+def _make_image_filename(label, script_text, max_len=15):
+    """씬번호_(대본시작)_(대본끝).png 형식 파일명 생성."""
+    text = script_text.strip().replace("\n", " ")
+    if not text:
+        return f"{label}.png"
+    # 파일명에 사용 불가한 문자 제거
+    clean = re.sub(r'[\\/:*?"<>|]', '', text)
+    start = clean[:max_len]
+    end = clean[-max_len:] if len(clean) > max_len else ""
+    if end and start != end:
+        return f"{label}_{start}_{end}.png"
+    return f"{label}_{start}.png"
+
+
 # ============================================================
 # Streamlit 앱
 # ============================================================
@@ -1287,10 +1301,11 @@ if st.session_state.prompts_ready:
                         st.info(f"{label}\n(미생성)")
                 with ctrl_col:
                     if label in st.session_state.images_dict:
+                        dl_filename = _make_image_filename(label, script_text)
                         st.download_button(
                             f"📥 저장",
                             data=st.session_state.images_dict[label],
-                            file_name=f"{label}.png",
+                            file_name=dl_filename,
                             mime="image/png",
                             key=f"dl_{label}",
                         )
@@ -1339,9 +1354,19 @@ if st.session_state.prompts_ready:
         # 전체 ZIP 다운로드
         if st.session_state.images_dict:
             st.divider()
-            zip_data = create_zip(
-                [(f"{label}.png", data) for label, data in sorted(st.session_state.images_dict.items())]
-            )
+            # 대본 기반 파일명으로 ZIP 생성
+            zip_items = []
+            for label, data in sorted(st.session_state.images_dict.items()):
+                # label에서 prefix와 index 추출
+                if label.startswith("intro_"):
+                    idx = int(label.split("_")[1]) - 1
+                    segs = st.session_state.intro_segments
+                else:
+                    idx = int(label.split("_")[1]) - 1
+                    segs = st.session_state.body_segments
+                seg_text = segs[idx] if idx < len(segs) else ""
+                zip_items.append((_make_image_filename(label, seg_text), data))
+            zip_data = create_zip(zip_items)
             st.download_button(
                 "📦 전체 ZIP 다운로드",
                 data=zip_data,
