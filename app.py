@@ -1111,25 +1111,55 @@ if st.session_state.prompts_ready:
                 if not selected:
                     st.warning("선택된 프롬프트가 없습니다. 체크박스를 선택해주세요.")
                 else:
+                    import time as _time
                     progress = st.progress(0, text="이미지 생성 준비 중...")
+                    status_text = st.empty()
+                    total = len(selected)
+                    start_time = _time.time()
+                    success_count = 0
+                    fail_count = 0
 
                     for idx, (label, prompt) in enumerate(selected):
+                        elapsed = _time.time() - start_time
+                        if idx > 0:
+                            avg_per_image = elapsed / idx
+                            remaining = avg_per_image * (total - idx)
+                            remaining_min = int(remaining // 60)
+                            remaining_sec = int(remaining % 60)
+                            eta_str = f"{remaining_min}분 {remaining_sec}초" if remaining_min > 0 else f"{remaining_sec}초"
+                        else:
+                            eta_str = "계산 중..."
+
+                        elapsed_min = int(elapsed // 60)
+                        elapsed_sec = int(elapsed % 60)
+                        elapsed_str = f"{elapsed_min}분 {elapsed_sec}초" if elapsed_min > 0 else f"{elapsed_sec}초"
+
                         progress.progress(
-                            idx / len(selected),
-                            text=f"이미지 생성 중... ({idx + 1}/{len(selected)})",
+                            idx / total,
+                            text=f"이미지 생성 중... ({idx + 1}/{total})",
                         )
+                        status_text.caption(f"⏱️ 경과: {elapsed_str} | 남은 예상: {eta_str} | ✅ {success_count} ❌ {fail_count}")
+
                         try:
                             img_data = generate_image_gc(
                                 client, image_model, prompt, aspect_ratio, negative_prompt
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
+                                success_count += 1
                             else:
                                 st.warning(f"{label}: 이미지 생성 결과 없음")
+                                fail_count += 1
                         except Exception as e:
                             st.warning(f"{label} 생성 실패: {e}")
+                            fail_count += 1
 
+                    total_elapsed = _time.time() - start_time
+                    total_min = int(total_elapsed // 60)
+                    total_sec = int(total_elapsed % 60)
+                    total_str = f"{total_min}분 {total_sec}초" if total_min > 0 else f"{total_sec}초"
                     progress.progress(1.0, text="완료!")
+                    status_text.success(f"🎉 완료! 총 {total_str} 소요 | ✅ {success_count}장 성공, ❌ {fail_count}장 실패")
                     st.session_state.images_ready = True
                     st.rerun()
 
