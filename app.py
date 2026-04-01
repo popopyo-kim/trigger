@@ -216,21 +216,22 @@ LANGUAGE_MAP = {
 # ============================================================
 
 def segment_text(text: str, seconds: int, chars_per_sec: float = 4.5) -> list:
-    """대본을 시간(초) 기준으로 분할. 1초당 약 4.5글자 기준."""
+    """대본을 시간(초) 기준으로 분할. 1초당 약 4.5글자 기준.
+    한국어 의미 단위(절, 구)를 존중하여 자연스러운 위치에서 분할."""
     text = text.strip()
     if not text:
         return []
 
     target = int(seconds * chars_per_sec)
 
-    # 문장 단위로 먼저 분리 (마침표, 느낌표, 물음표, 줄바꿈 기준)
+    # 1차: 문장 단위 분리 (마침표, 느낌표, 물음표, 줄바꿈)
     sentences = re.split(r"(?<=[.!?。！？\n])\s*", text)
     sentences = [s.strip() for s in sentences if s.strip()]
 
     if not sentences:
         sentences = [text]
 
-    # 문장들을 target 글자 수에 맞게 그룹핑
+    # 2차: 문장들을 target 글자 수에 맞게 그룹핑
     segments = []
     current = ""
     for sent in sentences:
@@ -243,33 +244,69 @@ def segment_text(text: str, seconds: int, chars_per_sec: float = 4.5) -> list:
     if current:
         segments.append(current)
 
-    # 여전히 너무 긴 세그먼트는 공백 기준으로 추가 분할
+    # 3차: 여전히 긴 세그먼트는 의미 단위로 추가 분할
     final = []
     for seg in segments:
-        if len(seg) > target * 1.5:
-            final.extend(_split_at_spaces(seg, target))
+        if len(seg) > target * 1.3:
+            final.extend(_split_by_meaning(seg, target))
         else:
             final.append(seg)
 
     return final if final else [text]
 
 
-def _split_at_spaces(text: str, target: int) -> list:
-    """긴 텍스트를 공백 기준으로 target 길이에 맞게 분할."""
+def _split_by_meaning(text: str, target: int) -> list:
+    """한국어 의미 단위(절/구)를 존중하여 분할.
+    우선순위: 쉼표 > 연결어미 > 조사+공백 > 공백"""
     result = []
+
     while text:
-        if len(text) <= target:
+        text = text.strip()
+        if len(text) <= target * 1.3:
             result.append(text)
             break
-        pos = text.rfind(" ", 0, target + 1)
-        if pos <= 0:
-            pos = text.find(" ", target)
-        if pos <= 0:
-            result.append(text)
-            break
-        result.append(text[:pos].strip())
-        text = text[pos:].strip()
-    return result
+
+        # target 범위 내에서 가장 좋은 분할 지점 찾기
+        search_end = min(len(text), int(target * 1.3))
+        search_start = max(0, int(target * 0.5))
+        candidate_text = text[:search_end]
+
+        best_pos = -1
+
+        # 1순위: 쉼표 뒤
+        for m in re.finditer(r",\s*", candidate_text):
+            pos = m.end()
+            if search_start <= pos <= search_end:
+                best_pos = pos
+
+        # 2순위: 한국어 연결어미/종결 패턴 뒤 + 공백
+        if best_pos < search_start:
+            patterns = [
+                r"(?:습니다|입니다|됩니다|합니다|했습니다|됐습니다|겠습니다)\s+",
+                r"(?:었고|했고|되고|지만|는데|으며|하며|으나|지요|거든요|잖아요)\s+",
+                r"(?:했죠|됐죠|이죠|인데요|하고요|니까요|대요|래요)\s+",
+                r"(?:하여|되어|으로|에서|까지|부터|에게|한테|처럼|만큼)\s+",
+            ]
+            for pat in patterns:
+                for m in re.finditer(pat, candidate_text):
+                    pos = m.end()
+                    if search_start <= pos <= search_end:
+                        best_pos = pos
+
+        # 3순위: 공백 (최후 수단)
+        if best_pos < search_start:
+            pos = candidate_text.rfind(" ", search_start, search_end)
+            if pos > 0:
+                best_pos = pos + 1
+
+        # 분할 지점을 못 찾으면 target 위치에서 강제 분할
+        if best_pos < search_start:
+            best_pos = target
+
+        result.append(text[:best_pos].strip())
+        text = text[best_pos:]
+
+    return [r for r in result if r]
 
 
 # ============================================================
