@@ -8,6 +8,8 @@ import re
 import io
 import zipfile
 import base64
+import json
+import copy
 
 # ============================================================
 # 기본 형식 프롬프트 (Gems System Instructions v7.0)
@@ -84,6 +86,122 @@ PROMPT_PRESETS = {
     "🎬 시네마틱 애니메이션 (경제)": PROMPT_CINEMATIC,
     "✏️ 커스텀": "",
 }
+
+# ============================================================
+# 캐릭터 프로필 시스템
+# ============================================================
+
+CHARACTER_FIXED_FIELDS = {
+    "얼굴": "얼굴형, 피부색, 눈 모양/색, 코, 입 등",
+    "머리": "머리카락 스타일, 색상, 길이, 질감 등",
+    "체형": "등신 비율, 체형, 키, 특징적 신체 구조",
+    "의상": "상의, 하의, 신발 또는 의복 없음 등",
+    "액세서리": "모자, 안경, 목걸이, 소지품 등",
+    "나이대": "어린이/청소년/성인/노인 등",
+    "성별": "남성/여성/중성적/해당없음 등",
+    "색상 팔레트": "캐릭터의 전체적 색감, 주요 컬러",
+    "고유 특징": "눈에 띄는 식별 특징 (점, 흉터, 날개 등)",
+    "스타일": "그림체, 질감, 외곽선 스타일 등",
+}
+
+CHARACTER_VARIABLE_FIELDS = {
+    "표정": "기본 표정 (기쁨/슬픔/놀람/무심 등)",
+    "포즈": "기본 자세 (서있기/앉기/팔짱 등)",
+    "앵글": "기본 촬영 앵글 (정면/측면/클로즈업 등)",
+    "감정 이펙트": "감정 표현 소품 (땀방울/하트/느낌표 등)",
+    "환경 반응": "환경에 따른 반응 (바람에 흔들림, 추위에 움츠림 등)",
+}
+
+EMPTY_CHARACTER_PROFILE = {
+    "name": "",
+    "fixed": {k: "" for k in CHARACTER_FIXED_FIELDS},
+    "variable": {k: "" for k in CHARACTER_VARIABLE_FIELDS},
+    "extra_notes": "",
+}
+
+
+def analyze_character_image(client, model: str, image_bytes: bytes) -> dict:
+    """참조 이미지를 Gemini로 분석하여 캐릭터 프로필 JSON 반환."""
+    from google.genai import types
+    import json as _json
+
+    fixed_keys = list(CHARACTER_FIXED_FIELDS.keys())
+    variable_keys = list(CHARACTER_VARIABLE_FIELDS.keys())
+
+    analysis_prompt = (
+        "이 캐릭터 이미지를 분석해서 아래 JSON 형식으로 한국어로 상세하게 작성해주세요.\n"
+        "각 항목을 최대한 구체적이고 시각적으로 묘사해주세요.\n\n"
+        "```json\n{\n"
+        '  "fixed": {\n'
+    )
+    for k in fixed_keys:
+        analysis_prompt += f'    "{k}": "상세 묘사",\n'
+    analysis_prompt += "  },\n"
+    analysis_prompt += '  "variable": {\n'
+    for k in variable_keys:
+        analysis_prompt += f'    "{k}": "현재 이미지에서 보이는 상태 묘사",\n'
+    analysis_prompt += "  }\n}\n```\n"
+    analysis_prompt += "\n반드시 위 JSON 형식만 출력하세요. 다른 텍스트 없이 JSON만 출력."
+
+    response = client.models.generate_content(
+        model=model,
+        contents=[
+            types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+            analysis_prompt,
+        ],
+    )
+
+    # JSON 파싱
+    resp_text = response.text
+    json_match = re.search(r"\{[\s\S]*\}", resp_text)
+    if json_match:
+        try:
+            parsed = _json.loads(json_match.group())
+            result = copy.deepcopy(EMPTY_CHARACTER_PROFILE)
+            if "fixed" in parsed:
+                for k in fixed_keys:
+                    if k in parsed["fixed"]:
+                        result["fixed"][k] = parsed["fixed"][k]
+            if "variable" in parsed:
+                for k in variable_keys:
+                    if k in parsed["variable"]:
+                        result["variable"][k] = parsed["variable"][k]
+            return result
+        except _json.JSONDecodeError:
+            pass
+
+    # 파싱 실패 시 빈 프로필 반환
+    return copy.deepcopy(EMPTY_CHARACTER_PROFILE)
+
+
+def build_character_prompt_injection(characters: list) -> str:
+    """등록된 캐릭터 프로필들을 프롬프트에 주입할 텍스트로 변환."""
+    if not characters:
+        return ""
+
+    lines = ["\n[캐릭터 일관성 지침]"]
+    lines.append("아래 캐릭터들의 '고정 특징'은 모든 장면에서 반드시 유지하되,")
+    lines.append("'가변 특징'은 각 장면의 대본 내용에 맞게 자연스럽게 변화시켜주세요.")
+    lines.append("똑같은 모습의 반복이 아니라, 캐릭터의 본질을 유지하면서 장면에 맞는 연기를 해야 합니다.\n")
+
+    for char in characters:
+        if not char.get("name"):
+            continue
+        lines.append(f"### 캐릭터: {char['name']}")
+        lines.append("[고정 특징 - 반드시 유지]")
+        for k, v in char.get("fixed", {}).items():
+            if v.strip():
+                lines.append(f"  - {k}: {v}")
+        lines.append("[가변 특징 - 장면에 맞게 변화]")
+        for k, v in char.get("variable", {}).items():
+            if v.strip():
+                lines.append(f"  - {k}: {v} (기본값, 장면에 따라 변경)")
+        if char.get("extra_notes", "").strip():
+            lines.append(f"[추가 메모] {char['extra_notes']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
 
 LANGUAGE_MAP = {
     "한국어": "이미지 내에 한국어 텍스트/라벨을 적절히 포함할 수 있습니다. 프롬프트에 Korean text 허용을 명시하세요.",
@@ -285,10 +403,88 @@ _defaults = {
     "v": 0,
     "prompts_ready": False,
     "images_ready": False,
+    "characters": [],  # 캐릭터 프로필 리스트
+    "char_v": 0,  # 캐릭터 UI 버전
 }
 for _k, _val in _defaults.items():
     if _k not in st.session_state:
         st.session_state[_k] = _val
+
+# ---- 프로젝트 저장/불러오기 시스템 ----
+MAX_PROJECTS = 5
+if "projects" not in st.session_state:
+    st.session_state.projects = {}  # {이름: {데이터}}
+if "current_project" not in st.session_state:
+    st.session_state.current_project = ""
+
+
+def _save_current_project(name: str):
+    """현재 작업 상태를 프로젝트로 저장 (이미지 제외, 텍스트만)."""
+    st.session_state.projects[name] = {
+        "intro_segments": list(st.session_state.intro_segments),
+        "body_segments": list(st.session_state.body_segments),
+        "intro_prompts": list(st.session_state.intro_prompts),
+        "body_prompts": list(st.session_state.body_prompts),
+        "characters": copy.deepcopy(st.session_state.characters),
+        "prompts_ready": st.session_state.prompts_ready,
+    }
+    st.session_state.current_project = name
+    # 최대 5개 유지 - 초과 시 가장 오래된 것 삭제
+    while len(st.session_state.projects) > MAX_PROJECTS:
+        oldest = next(iter(st.session_state.projects))
+        del st.session_state.projects[oldest]
+
+
+def _load_project(name: str):
+    """저장된 프로젝트를 불러오기."""
+    proj = st.session_state.projects[name]
+    st.session_state.intro_segments = list(proj.get("intro_segments", []))
+    st.session_state.body_segments = list(proj.get("body_segments", []))
+    st.session_state.intro_prompts = list(proj.get("intro_prompts", []))
+    st.session_state.body_prompts = list(proj.get("body_prompts", []))
+    st.session_state.characters = copy.deepcopy(proj.get("characters", []))
+    st.session_state.prompts_ready = proj.get("prompts_ready", False)
+    st.session_state.images_ready = False
+    st.session_state.images_dict = {}
+    st.session_state.v += 1
+    st.session_state.char_v += 1
+    st.session_state.current_project = name
+
+
+def _auto_save():
+    """자동저장 - 작업 내용이 있으면 현재 프로젝트명으로 저장."""
+    if st.session_state.intro_segments or st.session_state.body_segments:
+        name = st.session_state.current_project or "자동저장"
+        _save_current_project(name)
+
+
+def _export_project_json() -> str:
+    """현재 프로젝트를 JSON 문자열로 내보내기."""
+    data = {
+        "intro_segments": list(st.session_state.intro_segments),
+        "body_segments": list(st.session_state.body_segments),
+        "intro_prompts": list(st.session_state.intro_prompts),
+        "body_prompts": list(st.session_state.body_prompts),
+        "characters": st.session_state.characters,
+        "prompts_ready": st.session_state.prompts_ready,
+    }
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _import_project_json(json_str: str):
+    """JSON 문자열에서 프로젝트를 불러오기."""
+    data = json.loads(json_str)
+    st.session_state.intro_segments = data.get("intro_segments", [])
+    st.session_state.body_segments = data.get("body_segments", [])
+    st.session_state.intro_prompts = data.get("intro_prompts", [])
+    st.session_state.body_prompts = data.get("body_prompts", [])
+    st.session_state.characters = data.get("characters", [])
+    st.session_state.prompts_ready = data.get("prompts_ready", False)
+    st.session_state.images_ready = False
+    st.session_state.images_dict = {}
+    st.session_state.v += 1
+    st.session_state.char_v += 1
+
 
 # ============================================================
 # 사이드바
@@ -408,6 +604,163 @@ with st.sidebar:
 st.title("🎨 이미지 생성기")
 
 # ────────────────────────────────────────────────────────────
+# 프로젝트 관리
+# ────────────────────────────────────────────────────────────
+
+with st.expander("📁 프로젝트 관리", expanded=False):
+    proj_col1, proj_col2 = st.columns(2)
+
+    with proj_col1:
+        st.markdown("**저장 / 불러오기**")
+        save_name = st.text_input(
+            "프로젝트 이름",
+            value=st.session_state.current_project or "",
+            placeholder="프로젝트 이름 입력",
+            key="proj_save_name",
+        )
+        if st.button("💾 현재 작업 저장"):
+            if save_name:
+                _save_current_project(save_name)
+                st.success(f"'{save_name}' 저장 완료!")
+            else:
+                st.warning("프로젝트 이름을 입력해주세요.")
+
+        if st.session_state.projects:
+            load_choice = st.selectbox(
+                "불러올 프로젝트",
+                list(st.session_state.projects.keys()),
+                key="proj_load_choice",
+            )
+            lc1, lc2 = st.columns(2)
+            with lc1:
+                if st.button("📂 불러오기"):
+                    _load_project(load_choice)
+                    st.success(f"'{load_choice}' 불러오기 완료!")
+                    st.rerun()
+            with lc2:
+                if st.button("🗑️ 삭제"):
+                    del st.session_state.projects[load_choice]
+                    st.rerun()
+
+            st.caption(f"저장된 프로젝트: {len(st.session_state.projects)}/{MAX_PROJECTS}")
+
+    with proj_col2:
+        st.markdown("**JSON 내보내기 / 가져오기**")
+        st.caption("브라우저를 닫아도 보관하려면 JSON으로 내보내세요.")
+
+        if st.session_state.intro_segments or st.session_state.body_segments:
+            json_str = _export_project_json()
+            st.download_button(
+                "📤 JSON 내보내기",
+                data=json_str,
+                file_name="project.json",
+                mime="application/json",
+            )
+
+        uploaded_json = st.file_uploader("📥 JSON 가져오기", type=["json"], key="proj_import")
+        if uploaded_json:
+            if st.button("적용"):
+                try:
+                    _import_project_json(uploaded_json.read().decode("utf-8"))
+                    st.success("프로젝트 가져오기 완료!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"가져오기 실패: {e}")
+
+# ────────────────────────────────────────────────────────────
+# 캐릭터 프로필 관리
+# ────────────────────────────────────────────────────────────
+
+with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
+    st.caption("캐릭터의 고정 특징을 등록하면 모든 이미지에 일관성을 유지합니다. 가변 특징은 장면에 따라 자동 변화됩니다.")
+
+    char_v = st.session_state.char_v
+
+    # ---- 새 캐릭터 추가 ----
+    st.subheader("캐릭터 추가")
+    add_col1, add_col2 = st.columns([3, 1])
+    with add_col1:
+        new_char_name = st.text_input("캐릭터 이름", placeholder="예: 병아리, 주인공 등", key=f"nc_name_{char_v}")
+    with add_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        add_manual = st.button("✏️ 수동 추가")
+
+    # 참조 이미지로 자동 분석
+    ref_image = st.file_uploader("참조 이미지 업로드 (자동 분석)", type=["png", "jpg", "jpeg", "webp"], key=f"ref_img_{char_v}")
+
+    if ref_image and new_char_name:
+        if st.button("🔍 이미지 분석 + 캐릭터 등록", type="primary"):
+            if not api_key:
+                st.error("API Key를 먼저 설정해주세요.")
+            else:
+                try:
+                    with st.spinner(f"'{new_char_name}' 캐릭터 분석 중..."):
+                        client = get_gemini_client(api_key)
+                        img_bytes = ref_image.read()
+                        profile = analyze_character_image(client, prompt_model, img_bytes)
+                        profile["name"] = new_char_name
+                        st.session_state.characters.append(profile)
+                        st.session_state.char_v += 1
+                        st.success(f"'{new_char_name}' 분석 완료! 아래에서 결과를 확인/수정하세요.")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"분석 실패: {e}")
+
+    if add_manual and new_char_name:
+        new_profile = copy.deepcopy(EMPTY_CHARACTER_PROFILE)
+        new_profile["name"] = new_char_name
+        st.session_state.characters.append(new_profile)
+        st.session_state.char_v += 1
+        st.rerun()
+
+    # ---- 등록된 캐릭터 편집 ----
+    if st.session_state.characters:
+        st.divider()
+        st.subheader(f"등록된 캐릭터 ({len(st.session_state.characters)}명)")
+
+        for ci, char in enumerate(st.session_state.characters):
+            with st.expander(f"🎭 {char['name'] or f'캐릭터 {ci+1}'}", expanded=False):
+                # 캐릭터 이름 편집
+                char["name"] = st.text_input(
+                    "이름", value=char["name"], key=f"cn_{ci}_{char_v}"
+                )
+
+                # 고정 특징
+                st.markdown("**🔒 고정 특징** (모든 장면에서 유지)")
+                for fk in CHARACTER_FIXED_FIELDS:
+                    char["fixed"][fk] = st.text_area(
+                        f"{fk} — {CHARACTER_FIXED_FIELDS[fk]}",
+                        value=char["fixed"].get(fk, ""),
+                        height=68,
+                        key=f"cf_{ci}_{fk}_{char_v}",
+                    )
+
+                # 가변 특징
+                st.markdown("**🔄 가변 특징** (장면마다 변화, 기본값 설정)")
+                for vk in CHARACTER_VARIABLE_FIELDS:
+                    char["variable"][vk] = st.text_area(
+                        f"{vk} — {CHARACTER_VARIABLE_FIELDS[vk]}",
+                        value=char["variable"].get(vk, ""),
+                        height=68,
+                        key=f"cv_{ci}_{vk}_{char_v}",
+                    )
+
+                # 추가 메모
+                char["extra_notes"] = st.text_area(
+                    "📝 추가 메모 (자유 기입)",
+                    value=char.get("extra_notes", ""),
+                    height=100,
+                    key=f"ce_{ci}_{char_v}",
+                    placeholder="캐릭터에 대한 추가 특징이나 주의사항을 자유롭게 작성하세요.",
+                )
+
+                # 삭제 버튼
+                if st.button(f"🗑️ '{char['name']}' 삭제", key=f"cdel_{ci}_{char_v}"):
+                    st.session_state.characters.pop(ci)
+                    st.session_state.char_v += 1
+                    st.rerun()
+
+# ────────────────────────────────────────────────────────────
 # 1단계: 대본 입력
 # ────────────────────────────────────────────────────────────
 
@@ -436,6 +789,7 @@ if st.button("✂️ 자동 분할", type="primary", use_container_width=True):
     st.session_state.intro_prompts = []
     st.session_state.body_prompts = []
     st.session_state.images = []
+    _auto_save()  # 자동저장
     st.rerun()
 
 # ────────────────────────────────────────────────────────────
@@ -566,6 +920,10 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                 client = get_gemini_client(api_key)
                 lang_inst = LANGUAGE_MAP[language]
 
+                # 캐릭터 정보를 system prompt에 주입
+                char_injection = build_character_prompt_injection(st.session_state.characters)
+                full_system_prompt = format_prompt + char_injection
+
                 with st.spinner("프롬프트 생성 중..."):
                     intro_segs = [
                         s for s in st.session_state.intro_segments if s.strip()
@@ -578,7 +936,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         st.session_state.intro_prompts = generate_prompts(
                             client,
                             prompt_model,
-                            format_prompt,
+                            full_system_prompt,
                             intro_segs,
                             "도입부",
                             lang_inst,
@@ -590,7 +948,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                         st.session_state.body_prompts = generate_prompts(
                             client,
                             prompt_model,
-                            format_prompt,
+                            full_system_prompt,
                             body_segs,
                             "본문",
                             lang_inst,
@@ -601,36 +959,74 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                 st.session_state.prompts_ready = True
                 st.session_state.images_ready = False
                 st.session_state.images = []
+                _auto_save()  # 자동저장
                 st.rerun()
 
             except Exception as e:
                 st.error(f"프롬프트 생성 실패: {e}")
 
-    # 프롬프트 표시 / 편집
+    # 프롬프트 표시 / 편집 (체크박스 포함)
     if st.session_state.prompts_ready:
         ver = st.session_state.v
+
+        # 체크박스 상태 초기화
+        if "intro_checks" not in st.session_state or len(st.session_state.intro_checks) != len(st.session_state.intro_prompts):
+            st.session_state.intro_checks = [True] * len(st.session_state.intro_prompts)
+        if "body_checks" not in st.session_state or len(st.session_state.body_checks) != len(st.session_state.body_prompts):
+            st.session_state.body_checks = [True] * len(st.session_state.body_prompts)
+
+        # 전체 선택/해제
+        sel_col1, sel_col2 = st.columns(2)
+        with sel_col1:
+            if st.button("☑️ 전체 선택"):
+                st.session_state.intro_checks = [True] * len(st.session_state.intro_prompts)
+                st.session_state.body_checks = [True] * len(st.session_state.body_prompts)
+                st.rerun()
+        with sel_col2:
+            if st.button("⬜ 전체 해제"):
+                st.session_state.intro_checks = [False] * len(st.session_state.intro_prompts)
+                st.session_state.body_checks = [False] * len(st.session_state.body_prompts)
+                st.rerun()
 
         if st.session_state.intro_prompts:
             st.subheader("📌 도입부 프롬프트")
             for i, p in enumerate(st.session_state.intro_prompts):
-                val = st.text_area(
-                    f"도입부 프롬프트 {i + 1}",
-                    value=p,
-                    height=120,
-                    key=f"ip_{i}_{ver}",
-                )
-                st.session_state.intro_prompts[i] = val
+                chk_col, txt_col = st.columns([0.5, 9.5])
+                with chk_col:
+                    st.session_state.intro_checks[i] = st.checkbox(
+                        "선택", value=st.session_state.intro_checks[i],
+                        key=f"ic_{i}_{ver}", label_visibility="collapsed"
+                    )
+                with txt_col:
+                    val = st.text_area(
+                        f"도입부 프롬프트 {i + 1}",
+                        value=p,
+                        height=120,
+                        key=f"ip_{i}_{ver}",
+                    )
+                    st.session_state.intro_prompts[i] = val
 
         if st.session_state.body_prompts:
             st.subheader("📌 본문 프롬프트")
             for i, p in enumerate(st.session_state.body_prompts):
-                val = st.text_area(
-                    f"본문 프롬프트 {i + 1}",
-                    value=p,
-                    height=120,
-                    key=f"bp_{i}_{ver}",
-                )
-                st.session_state.body_prompts[i] = val
+                chk_col, txt_col = st.columns([0.5, 9.5])
+                with chk_col:
+                    st.session_state.body_checks[i] = st.checkbox(
+                        "선택", value=st.session_state.body_checks[i],
+                        key=f"bc_{i}_{ver}", label_visibility="collapsed"
+                    )
+                with txt_col:
+                    val = st.text_area(
+                        f"본문 프롬프트 {i + 1}",
+                        value=p,
+                        height=120,
+                        key=f"bp_{i}_{ver}",
+                    )
+                    st.session_state.body_prompts[i] = val
+
+        selected_count = sum(st.session_state.intro_checks) + sum(st.session_state.body_checks)
+        total_count = len(st.session_state.intro_prompts) + len(st.session_state.body_prompts)
+        st.info(f"✅ {selected_count} / {total_count} 프롬프트 선택됨")
 
 # ────────────────────────────────────────────────────────────
 # 4단계: 이미지 생성
@@ -640,7 +1036,11 @@ if st.session_state.prompts_ready:
     st.divider()
     st.header("4단계: 이미지 생성")
 
-    if st.button("🖼️ 이미지 생성", type="primary", use_container_width=True):
+    # images를 dict로 관리 {label: bytes}
+    if "images_dict" not in st.session_state:
+        st.session_state.images_dict = {}
+
+    if st.button("🖼️ 선택된 이미지 생성", type="primary", use_container_width=True):
         if not api_key:
             st.error("API Key를 입력해주세요.")
         elif not image_model:
@@ -649,94 +1049,100 @@ if st.session_state.prompts_ready:
             try:
                 client = get_gemini_client(api_key)
 
-                all_prompts = []
-                for i, p in enumerate(st.session_state.intro_prompts):
-                    all_prompts.append((f"intro_{i + 1:03d}", p))
-                for i, p in enumerate(st.session_state.body_prompts):
-                    all_prompts.append((f"body_{i + 1:03d}", p))
+                # 체크된 프롬프트만 수집
+                selected = []
+                intro_checks = st.session_state.get("intro_checks", [])
+                body_checks = st.session_state.get("body_checks", [])
 
-                if not all_prompts:
-                    st.warning("생성할 프롬프트가 없습니다.")
+                for i, p in enumerate(st.session_state.intro_prompts):
+                    if i < len(intro_checks) and intro_checks[i]:
+                        selected.append((f"intro_{i + 1:03d}", p))
+                for i, p in enumerate(st.session_state.body_prompts):
+                    if i < len(body_checks) and body_checks[i]:
+                        selected.append((f"body_{i + 1:03d}", p))
+
+                if not selected:
+                    st.warning("선택된 프롬프트가 없습니다. 체크박스를 선택해주세요.")
                 else:
-                    images = []
                     progress = st.progress(0, text="이미지 생성 준비 중...")
 
-                    for idx, (label, prompt) in enumerate(all_prompts):
+                    for idx, (label, prompt) in enumerate(selected):
                         progress.progress(
-                            idx / len(all_prompts),
-                            text=f"이미지 생성 중... ({idx + 1}/{len(all_prompts)})",
+                            idx / len(selected),
+                            text=f"이미지 생성 중... ({idx + 1}/{len(selected)})",
                         )
-
                         try:
                             img_data = generate_image_gc(
                                 client, image_model, prompt, aspect_ratio
                             )
-
                             if img_data:
-                                images.append((label, img_data))
+                                st.session_state.images_dict[label] = img_data
                             else:
                                 st.warning(f"{label}: 이미지 생성 결과 없음")
                         except Exception as e:
                             st.warning(f"{label} 생성 실패: {e}")
 
                     progress.progress(1.0, text="완료!")
-                    st.session_state.images = images
                     st.session_state.images_ready = True
                     st.rerun()
 
             except Exception as e:
                 st.error(f"이미지 생성 실패: {e}")
 
-    # 이미지 표시 & 다운로드
-    if st.session_state.images_ready and st.session_state.images:
+    # 이미지 표시 + 개별 재생성 버튼
+    if st.session_state.images_ready and st.session_state.images_dict:
         st.subheader("생성된 이미지")
 
-        # 도입부 / 본문 구분 표시
-        intro_imgs = [
-            (l, d) for l, d in st.session_state.images if l.startswith("intro_")
-        ]
-        body_imgs = [
-            (l, d) for l, d in st.session_state.images if l.startswith("body_")
-        ]
+        def _show_images(section_label, prefix, prompts_list):
+            section_imgs = {k: v for k, v in st.session_state.images_dict.items() if k.startswith(prefix)}
+            if not section_imgs and not prompts_list:
+                return
+            st.markdown(f"**📌 {section_label}**")
+            cols = st.columns(min(3, max(1, len(prompts_list))))
+            for i, p in enumerate(prompts_list):
+                label = f"{prefix}_{i + 1:03d}"
+                with cols[i % len(cols)]:
+                    if label in st.session_state.images_dict:
+                        st.image(st.session_state.images_dict[label], caption=label, use_container_width=True)
+                        dl_col, regen_col = st.columns(2)
+                        with dl_col:
+                            st.download_button(
+                                f"📥 저장",
+                                data=st.session_state.images_dict[label],
+                                file_name=f"{label}.png",
+                                mime="image/png",
+                                key=f"dl_{label}",
+                            )
+                        with regen_col:
+                            if st.button(f"🔄 재생성", key=f"regen_{label}"):
+                                try:
+                                    client = get_gemini_client(api_key)
+                                    with st.spinner(f"{label} 재생성 중..."):
+                                        new_img = generate_image_gc(client, image_model, p, aspect_ratio)
+                                    if new_img:
+                                        st.session_state.images_dict[label] = new_img
+                                        st.rerun()
+                                    else:
+                                        st.warning("재생성 결과 없음")
+                                except Exception as e:
+                                    st.error(f"재생성 실패: {e}")
+                    else:
+                        st.info(f"{label}\n(미생성)")
 
-        if intro_imgs:
-            st.markdown("**📌 도입부**")
-            cols = st.columns(min(3, len(intro_imgs)))
-            for idx, (label, img_data) in enumerate(intro_imgs):
-                with cols[idx % len(cols)]:
-                    st.image(img_data, caption=label, use_container_width=True)
-                    st.download_button(
-                        f"📥 {label}.png",
-                        data=img_data,
-                        file_name=f"{label}.png",
-                        mime="image/png",
-                        key=f"dl_i_{idx}",
-                    )
-
-        if body_imgs:
-            st.markdown("**📌 본문**")
-            cols = st.columns(min(3, len(body_imgs)))
-            for idx, (label, img_data) in enumerate(body_imgs):
-                with cols[idx % len(cols)]:
-                    st.image(img_data, caption=label, use_container_width=True)
-                    st.download_button(
-                        f"📥 {label}.png",
-                        data=img_data,
-                        file_name=f"{label}.png",
-                        mime="image/png",
-                        key=f"dl_b_{idx}",
-                    )
+        _show_images("도입부", "intro", st.session_state.intro_prompts)
+        _show_images("본문", "body", st.session_state.body_prompts)
 
         # 전체 ZIP 다운로드
-        st.divider()
-        zip_data = create_zip(
-            [(f"{label}.png", data) for label, data in st.session_state.images]
-        )
-        st.download_button(
-            "📦 전체 ZIP 다운로드",
-            data=zip_data,
-            file_name="generated_images.zip",
-            mime="application/zip",
-            type="primary",
-            use_container_width=True,
-        )
+        if st.session_state.images_dict:
+            st.divider()
+            zip_data = create_zip(
+                [(f"{label}.png", data) for label, data in sorted(st.session_state.images_dict.items())]
+            )
+            st.download_button(
+                "📦 전체 ZIP 다운로드",
+                data=zip_data,
+                file_name="generated_images.zip",
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+            )
