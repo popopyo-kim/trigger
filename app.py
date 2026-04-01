@@ -1002,41 +1002,59 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                 st.session_state.body_checks = [False] * len(st.session_state.body_prompts)
                 st.rerun()
 
+        # 프롬프트 미리보기 상태
+        if "preview_images" not in st.session_state:
+            st.session_state.preview_images = {}
+
+        def _prompt_row(section, i, p, check_list, check_key_prefix, text_key_prefix):
+            chk_col, txt_col, test_col = st.columns([0.5, 8.5, 1])
+            with chk_col:
+                check_list[i] = st.checkbox(
+                    "선택", value=check_list[i],
+                    key=f"{check_key_prefix}_{i}_{ver}", label_visibility="collapsed"
+                )
+            with txt_col:
+                val = st.text_area(
+                    f"{section} 프롬프트 {i + 1}",
+                    value=p,
+                    height=120,
+                    key=f"{text_key_prefix}_{i}_{ver}",
+                )
+            with test_col:
+                preview_key = f"{text_key_prefix}_{i}"
+                if st.button("🔍", key=f"test_{text_key_prefix}_{i}", help="1장 테스트 생성"):
+                    if not api_key:
+                        st.error("API Key 필요")
+                    elif not image_model:
+                        st.error("이미지 모델 필요")
+                    else:
+                        try:
+                            client = get_gemini_client(api_key)
+                            with st.spinner("테스트 생성 중..."):
+                                test_img = generate_image_gc(client, image_model, val, aspect_ratio)
+                            if test_img:
+                                st.session_state.preview_images[preview_key] = test_img
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"실패: {e}")
+                if preview_key in st.session_state.preview_images:
+                    st.image(st.session_state.preview_images[preview_key], width=150)
+                    if st.button("✖️", key=f"clr_{text_key_prefix}_{i}", help="미리보기 닫기"):
+                        del st.session_state.preview_images[preview_key]
+                        st.rerun()
+            return val
+
         if st.session_state.intro_prompts:
             st.subheader("📌 도입부 프롬프트")
             for i, p in enumerate(st.session_state.intro_prompts):
-                chk_col, txt_col = st.columns([0.5, 9.5])
-                with chk_col:
-                    st.session_state.intro_checks[i] = st.checkbox(
-                        "선택", value=st.session_state.intro_checks[i],
-                        key=f"ic_{i}_{ver}", label_visibility="collapsed"
-                    )
-                with txt_col:
-                    val = st.text_area(
-                        f"도입부 프롬프트 {i + 1}",
-                        value=p,
-                        height=120,
-                        key=f"ip_{i}_{ver}",
-                    )
-                    st.session_state.intro_prompts[i] = val
+                val = _prompt_row("도입부", i, p, st.session_state.intro_checks, "ic", "ip")
+                st.session_state.intro_prompts[i] = val
 
         if st.session_state.body_prompts:
             st.subheader("📌 본문 프롬프트")
             for i, p in enumerate(st.session_state.body_prompts):
-                chk_col, txt_col = st.columns([0.5, 9.5])
-                with chk_col:
-                    st.session_state.body_checks[i] = st.checkbox(
-                        "선택", value=st.session_state.body_checks[i],
-                        key=f"bc_{i}_{ver}", label_visibility="collapsed"
-                    )
-                with txt_col:
-                    val = st.text_area(
-                        f"본문 프롬프트 {i + 1}",
-                        value=p,
-                        height=120,
-                        key=f"bp_{i}_{ver}",
-                    )
-                    st.session_state.body_prompts[i] = val
+                val = _prompt_row("본문", i, p, st.session_state.body_checks, "bc", "bp")
+                st.session_state.body_prompts[i] = val
 
         selected_count = sum(st.session_state.intro_checks) + sum(st.session_state.body_checks)
         total_count = len(st.session_state.intro_prompts) + len(st.session_state.body_prompts)
