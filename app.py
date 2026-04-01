@@ -1071,6 +1071,9 @@ if st.session_state.prompts_ready:
     # images를 dict로 관리 {label: bytes}
     if "images_dict" not in st.session_state:
         st.session_state.images_dict = {}
+    # 이미지 히스토리 {label: [bytes, bytes, ...]} - 재생성 이전 이미지 보관
+    if "images_history" not in st.session_state:
+        st.session_state.images_history = {}
 
     if st.button("🖼️ 선택된 이미지 생성", type="primary", use_container_width=True):
         if not api_key:
@@ -1203,6 +1206,12 @@ if st.session_state.prompts_ready:
                         if st.button(f"🔄 재생성", key=f"regen_{label}"):
                             try:
                                 client = get_gemini_client(api_key)
+                                # 현재 이미지를 히스토리에 저장
+                                if label not in st.session_state.images_history:
+                                    st.session_state.images_history[label] = []
+                                st.session_state.images_history[label].append(
+                                    st.session_state.images_dict[label]
+                                )
                                 with st.spinner(f"{label} 재생성 중..."):
                                     new_img = generate_image_gc(client, image_model, p, aspect_ratio)
                                 if new_img:
@@ -1212,6 +1221,24 @@ if st.session_state.prompts_ready:
                                     st.warning("재생성 결과 없음")
                             except Exception as e:
                                 st.error(f"재생성 실패: {e}")
+                        # 이전 버전 비교 뷰
+                        history = st.session_state.images_history.get(label, [])
+                        if history:
+                            with st.expander(f"📊 이전 버전 ({len(history)}장)"):
+                                for hi, old_img in enumerate(reversed(history)):
+                                    cmp_cur, cmp_old = st.columns(2)
+                                    with cmp_cur:
+                                        st.caption("현재")
+                                        st.image(st.session_state.images_dict[label], use_container_width=True)
+                                    with cmp_old:
+                                        st.caption(f"이전 v{len(history) - hi}")
+                                        st.image(old_img, use_container_width=True)
+                                        if st.button(f"↩️ 복원", key=f"restore_{label}_{hi}"):
+                                            st.session_state.images_history[label].append(
+                                                st.session_state.images_dict[label]
+                                            )
+                                            st.session_state.images_dict[label] = old_img
+                                            st.rerun()
                     with st.expander("프롬프트 보기"):
                         st.code(p, language=None)
 
