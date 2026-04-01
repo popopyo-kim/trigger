@@ -609,6 +609,55 @@ with st.sidebar:
             key=f"preset_{preset_choice}",
         )
 
+    st.divider()
+    st.subheader("🎨 UI 테마")
+    THEMES = {
+        "기본 다크": {
+            "bg": "#0E1117", "sidebar_bg": "#262730", "text": "#FAFAFA",
+            "primary": "#FF6B6B", "card_bg": "#1E1E2E",
+        },
+        "라이트": {
+            "bg": "#FFFFFF", "sidebar_bg": "#F0F2F6", "text": "#31333F",
+            "primary": "#FF4B4B", "card_bg": "#F8F9FA",
+        },
+        "블루 다크": {
+            "bg": "#0D1B2A", "sidebar_bg": "#1B2838", "text": "#E0E1DD",
+            "primary": "#48CAE4", "card_bg": "#1B263B",
+        },
+        "그린 다크": {
+            "bg": "#1A1A2E", "sidebar_bg": "#16213E", "text": "#E0E0E0",
+            "primary": "#00B4D8", "card_bg": "#0F3460",
+        },
+    }
+    theme_choice = st.selectbox("테마 선택", list(THEMES.keys()), index=0)
+    theme = THEMES[theme_choice]
+
+    st.markdown(f"""
+    <style>
+        .stApp {{
+            background-color: {theme["bg"]};
+            color: {theme["text"]};
+        }}
+        section[data-testid="stSidebar"] {{
+            background-color: {theme["sidebar_bg"]};
+        }}
+        .stButton > button {{
+            border-color: {theme["primary"]};
+        }}
+        .stButton > button:hover {{
+            background-color: {theme["primary"]};
+            color: white;
+        }}
+        .stProgress > div > div > div > div {{
+            background-color: {theme["primary"]};
+        }}
+        div[data-testid="stExpander"] {{
+            background-color: {theme["card_bg"]};
+            border-radius: 8px;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+
 # ============================================================
 # 메인 영역
 # ============================================================
