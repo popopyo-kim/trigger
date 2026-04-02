@@ -525,6 +525,9 @@ _defaults = {
     "v": 0,
     "prompts_ready": False,
     "images_ready": False,
+    "images_dict": {},  # {label: bytes}
+    "images_history": {},  # {label: [bytes, ...]}
+    "preview_images": {},  # 프롬프트 테스트 미리보기
     "characters": [],  # 캐릭터 프로필 리스트
     "char_v": 0,  # 캐릭터 UI 버전
     "api_usage": {  # API 사용량 추적
@@ -1017,8 +1020,13 @@ if st.button("✂️ 자동 분할", type="primary", use_container_width=True):
     st.session_state.v += 1
     st.session_state.prompts_ready = False
     st.session_state.images_ready = False
-    st.session_state.intro_prompts = []
-    st.session_state.body_prompts = []
+    # 프롬프트 리스트를 세그먼트 수에 맞게 초기화 (개별 생성 호환)
+    st.session_state.intro_prompts = [""] * len(st.session_state.intro_segments)
+    st.session_state.body_prompts = [""] * len(st.session_state.body_segments)
+    st.session_state.intro_checks = [True] * len(st.session_state.intro_segments)
+    st.session_state.body_checks = [True] * len(st.session_state.body_segments)
+    st.session_state.images_dict = {}
+    st.session_state.images_history = {}
     st.session_state.images = []
     _auto_save()  # 자동저장
     st.rerun()
@@ -1110,7 +1118,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
 
             with bc4:
                 label = f"intro_{i + 1:03d}"
-                has_image = label in st.session_state.get("images_dict", {})
+                has_image = label in st.session_state.images_dict
                 btn_label = "🔄 다시 생성" if has_image else "🎯 생성"
                 if st.button(btn_label, key=f"igen_{i}_{ver}"):
                     if not api_key:
@@ -1124,12 +1132,13 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                             full_sp = format_prompt + char_injection
                             lang_inst = LANGUAGE_MAP[language]
 
+                            # 프롬프트 리스트 크기 보정
+                            while len(st.session_state.intro_prompts) < len(st.session_state.intro_segments):
+                                st.session_state.intro_prompts.append("")
+
                             with st.spinner(f"도입부 컷 {i+1} 프롬프트 생성 중..."):
                                 prompts = generate_prompts(client, prompt_model, full_sp, [val], "도입부", lang_inst)
                             if prompts:
-                                # 프롬프트 리스트 확장/갱신
-                                while len(st.session_state.intro_prompts) <= i:
-                                    st.session_state.intro_prompts.append("")
                                 st.session_state.intro_prompts[i] = prompts[0]
                                 st.session_state.api_usage["prompt_calls"] += 1
 
@@ -1139,12 +1148,8 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                         client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
                                     )
                                 if img_data:
-                                    if "images_dict" not in st.session_state:
-                                        st.session_state.images_dict = {}
                                     # 기존 이미지 히스토리 보관
                                     if has_image:
-                                        if "images_history" not in st.session_state:
-                                            st.session_state.images_history = {}
                                         if label not in st.session_state.images_history:
                                             st.session_state.images_history[label] = []
                                         st.session_state.images_history[label].append(
@@ -1154,6 +1159,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.prompts_ready = True
                                     st.session_state.images_ready = True
+                                    _auto_save()
                                     if gen_msg:
                                         st.toast(gen_msg)
                                     st.rerun()
@@ -1275,7 +1281,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
 
             with bc4:
                 label = f"body_{i + 1:03d}"
-                has_image = label in st.session_state.get("images_dict", {})
+                has_image = label in st.session_state.images_dict
                 btn_label = "🔄 다시 생성" if has_image else "🎯 생성"
                 if st.button(btn_label, key=f"bgen_{i}_{ver}"):
                     if not api_key:
@@ -1289,11 +1295,13 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                             full_sp = format_prompt + char_injection
                             lang_inst = LANGUAGE_MAP[language]
 
+                            # 프롬프트 리스트 크기 보정
+                            while len(st.session_state.body_prompts) < len(st.session_state.body_segments):
+                                st.session_state.body_prompts.append("")
+
                             with st.spinner(f"본문 컷 {i+1} 프롬프트 생성 중..."):
                                 prompts = generate_prompts(client, prompt_model, full_sp, [val], "본문", lang_inst)
                             if prompts:
-                                while len(st.session_state.body_prompts) <= i:
-                                    st.session_state.body_prompts.append("")
                                 st.session_state.body_prompts[i] = prompts[0]
                                 st.session_state.api_usage["prompt_calls"] += 1
 
@@ -1303,11 +1311,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                         client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
                                     )
                                 if img_data:
-                                    if "images_dict" not in st.session_state:
-                                        st.session_state.images_dict = {}
                                     if has_image:
-                                        if "images_history" not in st.session_state:
-                                            st.session_state.images_history = {}
                                         if label not in st.session_state.images_history:
                                             st.session_state.images_history[label] = []
                                         st.session_state.images_history[label].append(
@@ -1317,6 +1321,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.prompts_ready = True
                                     st.session_state.images_ready = True
+                                    _auto_save()
                                     if gen_msg:
                                         st.toast(gen_msg)
                                     st.rerun()
@@ -1429,8 +1434,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                 st.rerun()
 
         # 프롬프트 미리보기 상태
-        if "preview_images" not in st.session_state:
-            st.session_state.preview_images = {}
+        # preview_images는 _defaults에서 초기화됨
 
         def _prompt_row(section, i, p, check_list, check_key_prefix, text_key_prefix):
             chk_col, txt_col, test_col = st.columns([0.5, 8.5, 1])
@@ -1502,12 +1506,7 @@ if st.session_state.prompts_ready:
     st.divider()
     st.header("4단계: 이미지 생성")
 
-    # images를 dict로 관리 {label: bytes}
-    if "images_dict" not in st.session_state:
-        st.session_state.images_dict = {}
-    # 이미지 히스토리 {label: [bytes, bytes, ...]} - 재생성 이전 이미지 보관
-    if "images_history" not in st.session_state:
-        st.session_state.images_history = {}
+    # images_dict, images_history는 _defaults에서 초기화됨
 
     if st.button("🖼️ 선택된 이미지 생성", type="primary", use_container_width=True):
         if not api_key:
