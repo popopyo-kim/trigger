@@ -540,6 +540,25 @@ def generate_image_imagen(client, model: str, prompt: str) -> bytes:
     return None
 
 
+def _log_generation(label: str, model: str, prompt: str, seed, status: str, msg: str = ""):
+    """이미지 생성 이력을 세션 로그에 기록."""
+    from datetime import datetime
+    if "generation_log" not in st.session_state:
+        st.session_state.generation_log = []
+    st.session_state.generation_log.append({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "label": label,
+        "model": model,
+        "prompt": (prompt or "")[:300],
+        "seed": seed,
+        "status": status,
+        "msg": msg or "",
+    })
+    # 메모리 보호: 최대 500개
+    if len(st.session_state.generation_log) > 500:
+        st.session_state.generation_log = st.session_state.generation_log[-500:]
+
+
 def create_zip(images: list) -> bytes:
     """(파일명, 바이트) 리스트를 ZIP으로 묶기."""
     buf = io.BytesIO()
@@ -591,6 +610,8 @@ _defaults = {
         "image_fail": 0,
         "char_analysis_calls": 0,
     },
+    "saved_presets": {},  # {이름: System Prompt 내용} - 사용자 저장 커스텀 프리셋
+    "generation_log": [],  # 이미지 생성 로그 [{label, model, prompt, seed, status, time}]
 }
 for _k, _val in _defaults.items():
     if _k not in st.session_state:
@@ -727,6 +748,14 @@ with st.sidebar:
     prompt_model = st.text_input("모델명", value="gemini-2.5-flash")
 
     st.divider()
+    st.subheader("⏱️ 분할 속도")
+    chars_per_sec = st.slider(
+        "1초당 글자수 (TTS 속도 기준)",
+        min_value=2.0, max_value=8.0, value=4.5, step=0.1,
+        help="낮을수록 느린 발화(글자 수↓), 높을수록 빠른 발화(글자 수↑). 한국어 일반적 4.5~5.5",
+    )
+
+    st.divider()
     st.subheader("이미지 생성")
     IMAGE_MODELS = {
         "나노바나나2 (Gemini 3.1 Flash Image)": "gemini-3.1-flash-image-preview",
@@ -774,9 +803,14 @@ with st.sidebar:
 
     st.divider()
     st.subheader("형식 프롬프트")
+
+    # 기본 프리셋 + 사용자 저장 프리셋 합치기
+    saved_keys = list(st.session_state.saved_presets.keys())
+    preset_options = list(PROMPT_PRESETS.keys()) + [f"💾 {n}" for n in saved_keys]
+
     preset_choice = st.selectbox(
         "프리셋 선택",
-        list(PROMPT_PRESETS.keys()),
+        preset_options,
         index=0,
     )
 
@@ -791,14 +825,45 @@ with st.sidebar:
             key="custom_prompt_editor",
         )
         st.session_state.custom_prompt = format_prompt
+    elif preset_choice.startswith("💾 "):
+        # 저장된 사용자 프리셋
+        saved_name = preset_choice[2:]
+        format_prompt = st.text_area(
+            f"저장된 프리셋: {saved_name}",
+            value=st.session_state.saved_presets.get(saved_name, ""),
+            height=400,
+            key=f"saved_{saved_name}",
+        )
+        # 수정 내용 자동 반영
+        st.session_state.saved_presets[saved_name] = format_prompt
+        if st.button(f"🗑️ '{saved_name}' 삭제", key=f"del_preset_{saved_name}"):
+            del st.session_state.saved_presets[saved_name]
+            st.rerun()
     else:
-        # 프리셋: 내용 확인 가능 (수정 시 커스텀으로 전환 권장)
+        # 기본 프리셋: 내용 확인 가능
         format_prompt = st.text_area(
             "System Prompt (프리셋)",
             value=PROMPT_PRESETS[preset_choice],
             height=400,
             key=f"preset_{preset_choice}",
         )
+
+    # 현재 프롬프트를 새 이름으로 저장
+    with st.expander("💾 현재 프롬프트를 프리셋으로 저장", expanded=False):
+        new_preset_name = st.text_input(
+            "프리셋 이름",
+            key="new_preset_name_input",
+            placeholder="예: 군사 시네마틱, 과학 다큐 등",
+        )
+        if st.button("저장", key="save_preset_btn"):
+            if not new_preset_name.strip():
+                st.warning("프리셋 이름을 입력하세요.")
+            elif new_preset_name in st.session_state.saved_presets:
+                st.warning("같은 이름의 프리셋이 이미 존재합니다.")
+            else:
+                st.session_state.saved_presets[new_preset_name] = format_prompt
+                st.success(f"'{new_preset_name}' 저장 완료!")
+                st.rerun()
 
     st.divider()
     st.subheader("🎨 UI 테마")
@@ -1082,8 +1147,8 @@ with col_body:
     )
 
 if st.button("✂️ 자동 분할", type="primary", use_container_width=True):
-    st.session_state.intro_segments = segment_text(intro_text, intro_sec)
-    st.session_state.body_segments = segment_text(body_text, body_sec)
+    st.session_state.intro_segments = segment_text(intro_text, intro_sec, chars_per_sec)
+    st.session_state.body_segments = segment_text(body_text, body_sec, chars_per_sec)
     st.session_state.v += 1
     st.session_state.prompts_ready = False
     st.session_state.images_ready = False
@@ -1131,7 +1196,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
 
             with c_info:
                 chars = len(val)
-                secs = chars / 4.5
+                secs = chars / chars_per_sec
                 if secs > 6:
                     st.error(f"⚠️ {chars}글자 / ~{secs:.1f}초  — 6초 초과!")
                 else:
@@ -1228,12 +1293,14 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.prompts_ready = True
                                     st.session_state.images_ready = True
+                                    _log_generation(label, image_model, prompts[0], seed_value, "✅ 성공", gen_msg)
                                     _auto_save()
                                     if gen_msg:
                                         st.toast(gen_msg)
                                     st.rerun()
                                 else:
                                     st.session_state.api_usage["image_fail"] += 1
+                                    _log_generation(label, image_model, prompts[0], seed_value, "❌ 실패", gen_msg)
                                     st.warning(gen_msg or "이미지 생성 실패")
                         except Exception as e:
                             st.error(f"생성 실패: {e}")
@@ -1277,7 +1344,7 @@ if st.session_state.intro_segments or st.session_state.body_segments:
 
             with c_info:
                 chars = len(val)
-                secs = chars / 4.5
+                secs = chars / chars_per_sec
                 st.info(f"{chars}글자 / ~{secs:.1f}초")
 
             # 액션 버튼
@@ -1392,12 +1459,14 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.prompts_ready = True
                                     st.session_state.images_ready = True
+                                    _log_generation(label, image_model, prompts[0], seed_value, "✅ 성공", gen_msg)
                                     _auto_save()
                                     if gen_msg:
                                         st.toast(gen_msg)
                                     st.rerun()
                                 else:
                                     st.session_state.api_usage["image_fail"] += 1
+                                    _log_generation(label, image_model, prompts[0], seed_value, "❌ 실패", gen_msg)
                                     st.warning(gen_msg or "이미지 생성 실패")
                         except Exception as e:
                             st.error(f"생성 실패: {e}")
@@ -1641,16 +1710,19 @@ if st.session_state.prompts_ready:
                                 st.session_state.images_dict[label] = img_data
                                 st.session_state.api_usage["image_success"] += 1
                                 success_count += 1
+                                _log_generation(label, image_model, prompt, seed_value, "✅ 성공", gen_msg)
                                 if gen_msg:
                                     st.caption(f"  {label}: {gen_msg}")
                             else:
                                 st.warning(f"{label}: {gen_msg or '이미지 생성 결과 없음'}")
                                 st.session_state.api_usage["image_fail"] += 1
                                 fail_count += 1
+                                _log_generation(label, image_model, prompt, seed_value, "❌ 실패", gen_msg)
                         except Exception as e:
                             st.warning(f"{label} 생성 실패: {e}")
                             st.session_state.api_usage["image_fail"] += 1
                             fail_count += 1
+                            _log_generation(label, image_model, prompt, seed_value, "❌ 예외", str(e))
 
                     total_elapsed = _time.time() - start_time
                     total_min = int(total_elapsed // 60)
@@ -1663,6 +1735,64 @@ if st.session_state.prompts_ready:
 
             except Exception as e:
                 st.error(f"이미지 생성 실패: {e}")
+
+    # 타임라인 요약 뷰 (씬 한눈에 보기)
+    has_segments = (st.session_state.intro_segments or st.session_state.body_segments)
+    if has_segments:
+        with st.expander("📊 타임라인 요약 (전체 씬 한눈에 보기)", expanded=False):
+            def _timeline_summary(section_label, prefix, segments_list):
+                if not segments_list:
+                    return
+                total_chars = sum(len(s) for s in segments_list)
+                total_secs = total_chars / chars_per_sec
+                done = sum(
+                    1 for i in range(len(segments_list))
+                    if f"{prefix}_{i + 1:03d}" in st.session_state.images_dict
+                )
+                st.markdown(
+                    f"**{section_label}** — {len(segments_list)}컷 / "
+                    f"{total_chars}글자 / ~{total_secs:.1f}초 / "
+                    f"이미지 {done}/{len(segments_list)}"
+                )
+                rows = []
+                for i, seg in enumerate(segments_list):
+                    label = f"{prefix}_{i + 1:03d}"
+                    chars = len(seg)
+                    secs = chars / chars_per_sec
+                    has_img = "🖼️" if label in st.session_state.images_dict else "⬜"
+                    preview = seg.strip().replace("\n", " ")
+                    if len(preview) > 50:
+                        preview = preview[:50] + "…"
+                    rows.append({
+                        "씬": i + 1,
+                        "상태": has_img,
+                        "글자": chars,
+                        "초": f"{secs:.1f}",
+                        "대본": preview,
+                    })
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+
+            _timeline_summary("📌 도입부", "intro", st.session_state.intro_segments)
+            _timeline_summary("📌 본문", "body", st.session_state.body_segments)
+
+    # 생성 로그 표시
+    if st.session_state.get("generation_log"):
+        with st.expander(f"📜 생성 로그 ({len(st.session_state.generation_log)}건)", expanded=False):
+            log_rows = []
+            for entry in reversed(st.session_state.generation_log[-100:]):
+                log_rows.append({
+                    "시각": entry["time"],
+                    "라벨": entry["label"],
+                    "상태": entry["status"],
+                    "모델": entry["model"],
+                    "시드": entry.get("seed") if entry.get("seed") is not None else "-",
+                    "프롬프트": entry["prompt"][:80] + ("…" if len(entry["prompt"]) > 80 else ""),
+                    "메시지": entry.get("msg", ""),
+                })
+            st.dataframe(log_rows, use_container_width=True, hide_index=True)
+            if st.button("🗑️ 로그 비우기", key="clear_log_btn"):
+                st.session_state.generation_log = []
+                st.rerun()
 
     # 이미지 표시 + 개별 재생성 버튼
     if st.session_state.images_ready and st.session_state.images_dict:
@@ -1707,7 +1837,7 @@ if st.session_state.prompts_ready:
                 # 해당 씬의 대본 텍스트
                 script_text = segments_list[i] if i < len(segments_list) else ""
                 chars = len(script_text)
-                secs = chars / 4.5
+                secs = chars / chars_per_sec
 
                 st.markdown(f"---")
                 # 씬 헤더 + 순서 이동 버튼
@@ -1759,10 +1889,12 @@ if st.session_state.prompts_ready:
                                 if new_img:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.images_dict[label] = new_img
+                                    _log_generation(label, image_model, p, seed_value, "🔄 재생성", regen_msg)
                                     if regen_msg:
                                         st.toast(regen_msg)
                                     st.rerun()
                                 else:
+                                    _log_generation(label, image_model, p, seed_value, "❌ 재생성 실패", regen_msg)
                                     st.warning(regen_msg or "재생성 결과 없음")
                             except Exception as e:
                                 st.error(f"재생성 실패: {e}")
