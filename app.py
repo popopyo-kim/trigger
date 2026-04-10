@@ -276,11 +276,46 @@ def build_character_prompt_injection(characters: list) -> str:
     return "\n".join(lines)
 
 
+def augment_negative_for_language(negative: str, language: str) -> str:
+    """선택된 언어에 따라 다른 언어 문자를 negative prompt에 자동 추가.
+    이미지 모델이 프리셋의 미학 키워드(예: Japanese anime)에 이끌려
+    엉뚱한 언어 문자를 생성하는 것을 방지."""
+    lang_negatives = {
+        "한국어": "japanese text, hiragana, katakana, kanji, chinese characters, english letters",
+        "日本語": "korean text, hangul, chinese characters, english letters",
+        "English": "korean text, hangul, japanese text, hiragana, katakana, kanji, chinese characters",
+        "언어없음": "text, letters, words, hangul, kanji, hiragana, katakana, chinese characters, english letters",
+    }
+    extra = lang_negatives.get(language, "")
+    if not extra:
+        return negative
+    if negative.strip():
+        return f"{negative.strip()}, {extra}"
+    return extra
+
+
 LANGUAGE_MAP = {
-    "한국어": "이미지 내에 한국어 텍스트/라벨을 적절히 포함할 수 있습니다. 프롬프트에 Korean text 허용을 명시하세요.",
-    "日本語": "이미지 내에 일본어 텍스트/라벨을 적절히 포함할 수 있습니다. 프롬프트에 Japanese text 허용을 명시하세요.",
-    "English": "이미지 내에 영어 텍스트/라벨을 적절히 포함할 수 있습니다. 프롬프트에 English text 허용을 명시하세요.",
-    "언어없음": "이미지에 어떠한 글자, 문자, 텍스트도 포함하지 마세요. 모든 프롬프트에 'no text, no letters, no words'를 반드시 포함하세요.",
+    "한국어": (
+        "🚨 이미지 내 텍스트 언어 하드 제약: 오직 '한국어(Korean/Hangul)'만 허용합니다. "
+        "일본어(hiragana, katakana, kanji), 중국어, 영어 등 다른 언어 문자는 절대 포함 금지. "
+        "모든 간판, 라벨, 문서, UI 요소의 글자는 한글로만 작성. "
+        "프롬프트에 'Korean Hangul text only, no Japanese, no Chinese, no English letters'를 반드시 포함하세요."
+    ),
+    "日本語": (
+        "🚨 이미지 내 텍스트 언어 하드 제약: 오직 '일본어(Japanese: hiragana/katakana/kanji)'만 허용합니다. "
+        "한국어, 중국어, 영어 등 다른 언어 문자는 절대 포함 금지. "
+        "프롬프트에 'Japanese text only (hiragana, katakana, kanji), no Korean, no Chinese, no English letters'를 반드시 포함하세요."
+    ),
+    "English": (
+        "🚨 이미지 내 텍스트 언어 하드 제약: 오직 '영어(English alphabet)'만 허용합니다. "
+        "한국어, 일본어, 중국어 등 다른 언어 문자는 절대 포함 금지. "
+        "프롬프트에 'English alphabet text only, no Korean, no Japanese, no Chinese characters'를 반드시 포함하세요."
+    ),
+    "언어없음": (
+        "🚨 이미지 내 텍스트 언어 하드 제약: 어떠한 글자, 문자, 텍스트도 절대 포함 금지. "
+        "간판/라벨/문서/UI의 글자는 모두 기호나 도형으로 대체. "
+        "모든 프롬프트에 'no text, no letters, no words, no Korean, no Japanese, no English, no Chinese characters'를 반드시 포함하세요."
+    ),
 }
 
 
@@ -433,17 +468,29 @@ def generate_prompts(client, model: str, system_prompt: str,
             "장면이 전환되면 새로운 장면으로 구성하세요.\n"
         )
 
+    # 언어 지시를 system_instruction에 직접 주입 (하드 제약으로 격상)
+    # → 프리셋의 "Japanese anime style" 같은 미학 키워드가 언어를 오염시키는 문제 방지
+    lang_hard_constraint = (
+        "\n\n" + "=" * 60 + "\n"
+        "[🚨 LANGUAGE HARD CONSTRAINT — 최우선, 절대 위반 금지]\n"
+        f"{lang_instruction}\n"
+        "위 언어 제약은 이 프롬프트 전체의 어떤 스타일 지침보다도 우선합니다. "
+        "예: 'Japanese anime style'이라는 미학 지침이 있어도 이미지 내 문자는 지정된 언어만 사용. "
+        "미학(아트 스타일)과 텍스트 언어는 별개임을 명심하세요.\n"
+        + "=" * 60
+    )
+    effective_system_prompt = system_prompt + lang_hard_constraint
+
     user_msg = (
         f"🚨 최우선 지시: 위 System Instruction의 스타일 가이드(Style Lock), "
-        f"출력 템플릿(Output Template), 절대 규칙(Zero Tolerance Rules), 캐릭터 일관성 지침을 "
-        f"모든 프롬프트에 빠짐없이 그대로 적용하세요. "
+        f"출력 템플릿(Output Template), 절대 규칙(Zero Tolerance Rules), 캐릭터 일관성 지침, "
+        f"그리고 LANGUAGE HARD CONSTRAINT를 모든 프롬프트에 빠짐없이 그대로 적용하세요. "
         f"System Instruction에 명시된 prefix/접두 문구가 있다면 모든 프롬프트의 맨 앞에 반드시 포함하세요.\n\n"
         f"다음은 '{section_label}'의 대본 세그먼트입니다.\n\n"
         f"[보조 처리 방법 — System Instruction과 충돌 시 System Instruction이 우선]\n{extraction_instruction}\n"
-        f"[언어 지시] {lang_instruction}\n"
         f"{prev_context}\n"
         f"대본 세그먼트:\n{numbered}\n\n"
-        f"각 번호에 맞춰 System Instruction의 스타일/템플릿을 준수하는 영문 이미지 프롬프트를 작성하세요.\n"
+        f"각 번호에 맞춰 System Instruction의 스타일/템플릿/언어 제약을 모두 준수하는 영문 이미지 프롬프트를 작성하세요.\n"
         f'출력 형식: 번호) "프롬프트 내용" (System Instruction에 다른 출력 형식이 명시되어 있으면 그것을 우선 따름)\n'
     )
 
@@ -451,7 +498,7 @@ def generate_prompts(client, model: str, system_prompt: str,
         model=model,
         contents=user_msg,
         config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
+            system_instruction=effective_system_prompt,
         ),
     )
 
@@ -1352,7 +1399,8 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                 with st.spinner(f"도입부 컷 {i+1} 이미지 생성 중..."):
                                     st.session_state.api_usage["image_calls"] += 1
                                     img_data, gen_msg = generate_image_gc(
-                                        client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
+                                        client, image_model, prompts[0], aspect_ratio,
+                                        augment_negative_for_language(negative_prompt, language), seed_value
                                     )
                                 if img_data:
                                     # 기존 이미지 히스토리 보관
@@ -1519,7 +1567,8 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                                 with st.spinner(f"본문 컷 {i+1} 이미지 생성 중..."):
                                     st.session_state.api_usage["image_calls"] += 1
                                     img_data, gen_msg = generate_image_gc(
-                                        client, image_model, prompts[0], aspect_ratio, negative_prompt, seed_value
+                                        client, image_model, prompts[0], aspect_ratio,
+                                        augment_negative_for_language(negative_prompt, language), seed_value
                                     )
                                 if img_data:
                                     if has_image:
@@ -1675,7 +1724,10 @@ if st.session_state.intro_segments or st.session_state.body_segments:
                             client = get_gemini_client(api_key)
                             st.session_state.api_usage["image_calls"] += 1
                             with st.spinner("테스트 생성 중... (실패 시 자동 재시도)"):
-                                test_img, test_msg = generate_image_gc(client, image_model, val, aspect_ratio, negative_prompt, seed_value)
+                                test_img, test_msg = generate_image_gc(
+                                    client, image_model, val, aspect_ratio,
+                                    augment_negative_for_language(negative_prompt, language), seed_value
+                                )
                             if test_img:
                                 st.session_state.api_usage["image_success"] += 1
                                 st.session_state.preview_images[preview_key] = test_img
@@ -1777,7 +1829,8 @@ if st.session_state.prompts_ready:
                         try:
                             st.session_state.api_usage["image_calls"] += 1
                             img_data, gen_msg = generate_image_gc(
-                                client, image_model, prompt, aspect_ratio, negative_prompt, seed_value
+                                client, image_model, prompt, aspect_ratio,
+                                augment_negative_for_language(negative_prompt, language), seed_value
                             )
                             if img_data:
                                 st.session_state.images_dict[label] = img_data
@@ -1958,7 +2011,10 @@ if st.session_state.prompts_ready:
                                 )
                                 st.session_state.api_usage["image_calls"] += 1
                                 with st.spinner(f"{label} 재생성 중... (실패 시 자동 재시도)"):
-                                    new_img, regen_msg = generate_image_gc(client, image_model, p, aspect_ratio, negative_prompt, seed_value)
+                                    new_img, regen_msg = generate_image_gc(
+                                        client, image_model, p, aspect_ratio,
+                                        augment_negative_for_language(negative_prompt, language), seed_value
+                                    )
                                 if new_img:
                                     st.session_state.api_usage["image_success"] += 1
                                     st.session_state.images_dict[label] = new_img
