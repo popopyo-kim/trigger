@@ -136,10 +136,13 @@ EMPTY_CHARACTER_PROFILE = {
 }
 
 
-def analyze_character_image(client, model: str, image_bytes: bytes, mime_type: str = "image/png") -> dict:
-    """참조 이미지를 Gemini로 분석하여 캐릭터 프로필 JSON 반환."""
+def analyze_character_image(client, model: str, image_bytes: bytes, mime_type: str = "image/png",
+                             max_retries: int = 3, fallback_models: list = None) -> dict:
+    """참조 이미지를 Gemini로 분석하여 캐릭터 프로필 JSON 반환.
+    503/과부하 시 지수 백오프 재시도 + 대체 모델 fallback 지원."""
     from google.genai import types
     import json as _json
+    import time as _time
 
     fixed_keys = list(CHARACTER_FIXED_FIELDS.keys())
     adaptive_keys = list(CHARACTER_ADAPTIVE_FIELDS.keys())
@@ -165,13 +168,51 @@ def analyze_character_image(client, model: str, image_bytes: bytes, mime_type: s
     analysis_prompt += "  }\n}\n```\n"
     analysis_prompt += "\n반드시 위 JSON 형식만 출력하세요. 다른 텍스트 없이 JSON만 출력."
 
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            analysis_prompt,
-        ],
-    )
+    # 시도할 모델 목록: 기본 모델 + fallback
+    models_to_try = [model]
+    if fallback_models:
+        for fm in fallback_models:
+            if fm and fm not in models_to_try:
+                models_to_try.append(fm)
+
+    last_error = None
+    response = None
+
+    for try_model in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=try_model,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        analysis_prompt,
+                    ],
+                )
+                last_error = None
+                break  # 성공 → 재시도 루프 종료
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                # 503/과부하/429: 재시도 가치 있음
+                if any(s in err_str for s in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "overloaded", "high demand"]):
+                    if attempt < max_retries - 1:
+                        wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                        _time.sleep(wait)
+                        continue
+                    else:
+                        break  # 현재 모델 재시도 소진 → 다음 fallback 모델로
+                else:
+                    # 복구 불가 에러 (인증/할당/형식 등) → 즉시 포기
+                    raise
+        if response is not None:
+            break  # 한 모델이라도 성공하면 탈출
+
+    if response is None:
+        # 모든 모델/재시도 실패
+        raise RuntimeError(
+            f"모델 과부하로 분석 실패 ({max_retries}회 재시도 × {len(models_to_try)}개 모델). "
+            f"마지막 에러: {last_error}"
+        )
 
     # JSON 파싱
     resp_text = response.text
@@ -1043,7 +1084,7 @@ with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
             st.error("사이드바에서 API Key를 먼저 설정해주세요.")
         else:
             try:
-                with st.spinner(f"'{new_char_name}' 캐릭터 분석 중..."):
+                with st.spinner(f"'{new_char_name}' 캐릭터 분석 중... (실패 시 자동 재시도 + 대체 모델)"):
                     client = get_gemini_client(api_key)
                     img_bytes = ref_image.getvalue()
                     # MIME 타입 결정
@@ -1055,14 +1096,41 @@ with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
                     else:
                         mime = "image/png"
                     st.session_state.api_usage["char_analysis_calls"] += 1
-                    profile = analyze_character_image(client, prompt_model, img_bytes, mime)
+                    # Fallback 모델 체인: 기본 모델 실패 시 다른 Gemini 비전 모델로 재시도
+                    fallback_list = [
+                        "gemini-2.5-flash",
+                        "gemini-2.0-flash",
+                        "gemini-1.5-flash",
+                        "gemini-1.5-pro",
+                    ]
+                    profile = analyze_character_image(
+                        client, prompt_model, img_bytes, mime,
+                        max_retries=3, fallback_models=fallback_list,
+                    )
                     profile["name"] = new_char_name
                     st.session_state.characters.append(profile)
                     st.session_state.char_v += 1
                     st.success(f"'{new_char_name}' 분석 완료! 아래에서 결과를 확인/수정하세요.")
                     st.rerun()
             except Exception as e:
-                st.error(f"분석 실패: {e}")
+                err_msg = str(e)
+                if any(s in err_msg for s in ["503", "UNAVAILABLE", "overloaded", "high demand"]):
+                    st.error(
+                        "⚠️ Gemini API 서버가 현재 과부하 상태입니다 (503 UNAVAILABLE).\n\n"
+                        "자동 재시도 + 대체 모델 시도에도 실패했습니다. 아래 방법을 시도해보세요:\n"
+                        "1. **1~2분 후 다시 시도** (일시적 스파이크일 가능성 높음)\n"
+                        "2. **사이드바에서 프롬프트 모델 변경**: `gemini-2.0-flash` 또는 `gemini-1.5-flash`로 교체\n"
+                        "3. **수동 등록**: 분석 대신 '수동 추가' 후 아래에서 필드를 직접 입력\n\n"
+                        f"원본 에러: {err_msg[:200]}"
+                    )
+                elif any(s in err_msg for s in ["429", "RESOURCE_EXHAUSTED", "quota"]):
+                    st.error(
+                        "⚠️ API 할당량(Rate Limit) 초과입니다.\n\n"
+                        "1분 후 다시 시도하거나, 다른 API Key를 사용하세요.\n\n"
+                        f"원본 에러: {err_msg[:200]}"
+                    )
+                else:
+                    st.error(f"분석 실패: {err_msg}")
 
     if add_manual and new_char_name:
         new_profile = copy.deepcopy(EMPTY_CHARACTER_PROFILE)
