@@ -242,36 +242,81 @@ def analyze_character_image(client, model: str, image_bytes: bytes, mime_type: s
 
 
 def build_character_prompt_injection(characters: list) -> str:
-    """등록된 캐릭터 프로필들을 프롬프트에 주입할 텍스트로 변환."""
+    """등록된 캐릭터 프로필들을 프롬프트에 주입할 텍스트로 변환.
+    LLM이 영문 이미지 프롬프트 작성 시 캐릭터의 시각적 특징을 반드시 포함하도록 강제."""
     if not characters:
         return ""
 
-    lines = ["\n[캐릭터 일관성 + 장면 적응 지침]"]
-    lines.append("아래 캐릭터들의 '고정 특징'(얼굴/체형/머리/고유 특징)은 절대 변하지 않습니다.")
-    lines.append("'장면 적응 특징'(의상/액세서리)은 현재 대본의 주제에 맞게 능동적으로 변형하세요.")
-    lines.append("예: 군사 장면→군복, 경제 장면→정장, 과학 장면→연구복, 운동 장면→운동복")
-    lines.append("'가변 특징'(표정/포즈/앵글)은 매 장면 자유롭게 변화시키세요.")
-    lines.append("캐릭터의 '본질'은 유지하되 똑같은 모습 반복은 금지합니다.\n")
+    # 유효한 캐릭터만 필터
+    valid_chars = [c for c in characters if c.get("name")]
+    if not valid_chars:
+        return ""
 
-    for char in characters:
-        if not char.get("name"):
-            continue
-        lines.append(f"### 캐릭터: {char['name']}")
-        lines.append("[고정 특징 - 절대 불변]")
-        for k, v in char.get("fixed", {}).items():
-            if v.strip():
+    char_names = ", ".join(f"'{c['name']}'" for c in valid_chars)
+
+    lines = [
+        "\n" + "=" * 60,
+        "[🔒 REGISTERED CHARACTERS — 필수 적용, 최우선 지시]",
+        "=" * 60,
+        f"등록된 캐릭터: {char_names}",
+        "",
+        "⚠️ 아래 지시는 절대 위반 금지:",
+        "1. 장면에 등장하는 모든 인물은 반드시 아래 등록된 캐릭터 중 하나의 시각적 특징과 일치해야 합니다.",
+        "2. 대본이 이름 없이 '한 남자', '그녀', '사람' 등으로 표현해도, 등록 캐릭터의 특징을 그대로 적용하세요.",
+        "3. 생성하는 영문 이미지 프롬프트에는 반드시 아래 [English Visual Features] 블록의 내용을 "
+        "구체적인 영문 시각 묘사로 풀어서 포함해야 합니다 (예: 'a man with pure white round face, "
+        "thick black outline, wearing [scene-appropriate outfit]').",
+        "4. '고정 특징'(fixed: 얼굴/머리/체형/고유 특징)은 절대 변하지 않음 — 모든 씬에서 동일하게 유지.",
+        "5. '장면 적응 특징'(adaptive: 의상/액세서리)은 대본 주제에 맞게 변형 "
+        "(군사→군복, 경제→정장, 과학→연구복, 운동→운동복 등).",
+        "6. '가변 특징'(variable: 표정/포즈/앵글)은 대본 감정에 맞춰 자유롭게 변화.",
+        "",
+    ]
+
+    for char in valid_chars:
+        lines.append(f"### 📌 캐릭터: {char['name']}")
+
+        # 고정 특징
+        fixed_items = [(k, v) for k, v in char.get("fixed", {}).items() if v.strip()]
+        if fixed_items:
+            lines.append("**[FIXED — 절대 불변, 모든 씬에서 동일]**")
+            for k, v in fixed_items:
                 lines.append(f"  - {k}: {v}")
-        lines.append("[장면 적응 특징 - 주제에 맞게 변형]")
-        for k, v in char.get("adaptive", {}).items():
-            if v.strip():
-                lines.append(f"  - {k}: 기본={v} (대본 주제에 맞게 적응)")
-        lines.append("[가변 특징 - 매 장면 변화]")
-        for k, v in char.get("variable", {}).items():
-            if v.strip():
-                lines.append(f"  - {k}: {v} (기본값, 장면에 따라 변경)")
+
+        # 장면 적응
+        adaptive_items = [(k, v) for k, v in char.get("adaptive", {}).items() if v.strip()]
+        if adaptive_items:
+            lines.append("**[ADAPTIVE — 대본 주제에 맞게 변형]**")
+            for k, v in adaptive_items:
+                lines.append(f"  - {k}: 기본={v} → 현재 씬 주제에 맞춰 변형")
+
+        # 가변
+        variable_items = [(k, v) for k, v in char.get("variable", {}).items() if v.strip()]
+        if variable_items:
+            lines.append("**[VARIABLE — 매 씬 대본 감정에 따라 변화]**")
+            for k, v in variable_items:
+                lines.append(f"  - {k}: 기본값 {v}")
+
         if char.get("extra_notes", "").strip():
-            lines.append(f"[추가 메모] {char['extra_notes']}")
+            lines.append(f"**[추가 메모]** {char['extra_notes']}")
+
+        # 영문 시각 특징 요약 (LLM이 영문 프롬프트에 복사-반영하기 쉽도록)
+        english_features = []
+        for k, v in fixed_items:
+            english_features.append(f"{k}={v}")
+        if english_features:
+            lines.append(f"**[English Visual Features — 영문 프롬프트에 반드시 반영]**")
+            lines.append(f"  → Character '{char['name']}': " + "; ".join(english_features))
+            lines.append(f"  → 위 특징을 영어 시각 묘사로 번역해 프롬프트 본문에 포함할 것.")
+
         lines.append("")
+
+    lines.append("=" * 60)
+    lines.append("🚨 체크리스트 (프롬프트 생성 전 반드시 확인):")
+    lines.append("  ☐ 생성한 영문 프롬프트에 등록 캐릭터의 얼굴/체형/머리 특징이 구체적으로 명시됐는가?")
+    lines.append("  ☐ 의상이 현재 대본 주제에 맞게 적용됐는가?")
+    lines.append("  ☐ 대본에 이름이 없어도 등록 캐릭터의 모습으로 묘사했는가?")
+    lines.append("=" * 60)
 
     return "\n".join(lines)
 
@@ -450,12 +495,17 @@ def generate_prompts(client, model: str, system_prompt: str,
 
     numbered = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
 
+    # System Instruction에 등록 캐릭터가 포함됐는지 감지
+    has_registered_chars = "REGISTERED CHARACTERS" in system_prompt
+
     # 구조화 추출 지시 (System Instruction 보조용)
     extraction_instruction = (
         "각 대본 세그먼트를 처리할 때 아래 순서를 따르세요:\n"
         "① 핵심 요소 추출: 장소(where), 인물(who), 행동(action), 오브젝트(objects), 분위기(mood)를 대본에서 추출\n"
         "② 누락 검증: 대본에 명시된 고유명사, 사건, 사물이 빠지지 않았는지 확인\n"
-        "③ 프롬프트 조립: 위 System Instruction에 명시된 스타일 가이드와 출력 템플릿을 100% 적용하여 영문 프롬프트로 조립\n"
+        "③ 캐릭터 매칭: 장면에 인물이 등장하면 System Instruction의 REGISTERED CHARACTERS 블록에서 "
+        "해당 캐릭터를 찾아 고정 특징(얼굴/머리/체형)을 영문 시각 묘사로 번역해 포함\n"
+        "④ 프롬프트 조립: 위 System Instruction에 명시된 스타일 가이드와 출력 템플릿을 100% 적용하여 영문 프롬프트로 조립\n"
         "⚠️ 대본에 없는 내용을 임의로 추가하지 말 것. 대본에 있는 내용을 빠뜨리지 말 것.\n"
     )
 
@@ -481,16 +531,32 @@ def generate_prompts(client, model: str, system_prompt: str,
     )
     effective_system_prompt = system_prompt + lang_hard_constraint
 
+    # 캐릭터 강제 적용 명령 (등록 캐릭터가 있을 때만)
+    char_mandate = ""
+    if has_registered_chars:
+        char_mandate = (
+            "\n🔒 REGISTERED CHARACTERS 필수 적용:\n"
+            "- System Instruction의 [REGISTERED CHARACTERS] 블록에 등록된 캐릭터가 있습니다.\n"
+            "- 현재 장면에 인물이 등장하면(대본에 이름이 없더라도) 등록된 캐릭터의 "
+            "고정 특징(얼굴/머리/체형/고유 특징)을 영문 시각 묘사로 번역해 프롬프트에 반드시 포함하세요.\n"
+            "- 의상은 현재 대본 주제에 맞게 변형하되, 얼굴/체형/머리는 절대 변경 금지.\n"
+            "- 예시: 대본='한 남자가 회의실에서 발표한다' + 등록 캐릭터='김경제(pure white face, thick black outline)' "
+            "→ 영문 프롬프트에 'a man with pure white round face and thick black outline, "
+            "wearing a business suit, presenting in a conference room...' 같은 식으로 등록 캐릭터 특징을 반드시 반영.\n"
+            "- 여러 캐릭터 등록 시: 대본 맥락에서 가장 적합한 캐릭터 선택.\n"
+        )
+
     user_msg = (
         f"🚨 최우선 지시: 위 System Instruction의 스타일 가이드(Style Lock), "
-        f"출력 템플릿(Output Template), 절대 규칙(Zero Tolerance Rules), 캐릭터 일관성 지침, "
+        f"출력 템플릿(Output Template), 절대 규칙(Zero Tolerance Rules), REGISTERED CHARACTERS, "
         f"그리고 LANGUAGE HARD CONSTRAINT를 모든 프롬프트에 빠짐없이 그대로 적용하세요. "
-        f"System Instruction에 명시된 prefix/접두 문구가 있다면 모든 프롬프트의 맨 앞에 반드시 포함하세요.\n\n"
+        f"System Instruction에 명시된 prefix/접두 문구가 있다면 모든 프롬프트의 맨 앞에 반드시 포함하세요.\n"
+        f"{char_mandate}\n"
         f"다음은 '{section_label}'의 대본 세그먼트입니다.\n\n"
         f"[보조 처리 방법 — System Instruction과 충돌 시 System Instruction이 우선]\n{extraction_instruction}\n"
         f"{prev_context}\n"
         f"대본 세그먼트:\n{numbered}\n\n"
-        f"각 번호에 맞춰 System Instruction의 스타일/템플릿/언어 제약을 모두 준수하는 영문 이미지 프롬프트를 작성하세요.\n"
+        f"각 번호에 맞춰 System Instruction의 스타일/템플릿/언어 제약/등록 캐릭터를 모두 준수하는 영문 이미지 프롬프트를 작성하세요.\n"
         f'출력 형식: 번호) "프롬프트 내용" (System Instruction에 다른 출력 형식이 명시되어 있으면 그것을 우선 따름)\n'
     )
 
@@ -1190,6 +1256,16 @@ with st.expander("🧑‍🎨 캐릭터 프로필 관리", expanded=False):
     if st.session_state.characters:
         st.divider()
         st.subheader(f"등록된 캐릭터 ({len(st.session_state.characters)}명)")
+
+        # 디버깅: 실제 LLM에 주입되는 캐릭터 프롬프트 미리보기
+        with st.expander("🔍 디버그: LLM에 주입되는 캐릭터 지시문 미리보기", expanded=False):
+            preview_injection = build_character_prompt_injection(st.session_state.characters)
+            if preview_injection.strip():
+                st.code(preview_injection, language="markdown")
+                st.caption("⚠️ 이 텍스트가 System Instruction에 붙어 LLM에 전달됩니다. "
+                           "등록된 캐릭터가 생성 이미지에 반영되지 않으면 여기에 내용이 제대로 들어있는지 확인하세요.")
+            else:
+                st.warning("⚠️ 캐릭터 이름 또는 필드가 비어있어서 주입될 내용이 없습니다. 이름과 최소 고정 특징 하나 이상을 입력하세요.")
 
         for ci, char in enumerate(st.session_state.characters):
             with st.expander(f"🎭 {char['name'] or f'캐릭터 {ci+1}'}", expanded=False):
