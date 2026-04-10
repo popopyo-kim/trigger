@@ -368,17 +368,18 @@ def generate_prompts(client, model: str, system_prompt: str,
                      segments: list, section_label: str, lang_instruction: str,
                      prev_prompt: str = "") -> list:
     """Gemini LLM을 사용하여 각 세그먼트별 이미지 프롬프트 생성.
-    구조화 추출 방식: 대본 → 핵심요소 분해 → 프롬프트 조립."""
+    구조화 추출 방식: 대본 → 핵심요소 분해 → 프롬프트 조립.
+    System Instruction(프리셋)의 스타일/템플릿/규칙이 최우선."""
     from google.genai import types
 
     numbered = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
 
-    # 구조화 추출 지시
+    # 구조화 추출 지시 (System Instruction 보조용)
     extraction_instruction = (
-        "각 대본 세그먼트를 처리할 때 반드시 아래 순서를 따르세요:\n"
+        "각 대본 세그먼트를 처리할 때 아래 순서를 따르세요:\n"
         "① 핵심 요소 추출: 장소(where), 인물(who), 행동(action), 오브젝트(objects), 분위기(mood)를 대본에서 추출\n"
         "② 누락 검증: 대본에 명시된 고유명사, 사건, 사물이 빠지지 않았는지 확인\n"
-        "③ 프롬프트 조립: 추출한 요소를 빠짐없이 포함하여 출력 템플릿 형식의 영문 프롬프트 생성\n"
+        "③ 프롬프트 조립: 위 System Instruction에 명시된 스타일 가이드와 출력 템플릿을 100% 적용하여 영문 프롬프트로 조립\n"
         "⚠️ 대본에 없는 내용을 임의로 추가하지 말 것. 대본에 있는 내용을 빠뜨리지 말 것.\n"
     )
 
@@ -392,13 +393,17 @@ def generate_prompts(client, model: str, system_prompt: str,
         )
 
     user_msg = (
+        f"🚨 최우선 지시: 위 System Instruction의 스타일 가이드(Style Lock), "
+        f"출력 템플릿(Output Template), 절대 규칙(Zero Tolerance Rules), 캐릭터 일관성 지침을 "
+        f"모든 프롬프트에 빠짐없이 그대로 적용하세요. "
+        f"System Instruction에 명시된 prefix/접두 문구가 있다면 모든 프롬프트의 맨 앞에 반드시 포함하세요.\n\n"
         f"다음은 '{section_label}'의 대본 세그먼트입니다.\n\n"
-        f"[처리 방법]\n{extraction_instruction}\n"
+        f"[보조 처리 방법 — System Instruction과 충돌 시 System Instruction이 우선]\n{extraction_instruction}\n"
         f"[언어 지시] {lang_instruction}\n"
         f"{prev_context}\n"
         f"대본 세그먼트:\n{numbered}\n\n"
-        f"위의 각 번호에 맞춰 영문 이미지 프롬프트를 작성하세요.\n"
-        f'출력 형식: 번호) "프롬프트"\n'
+        f"각 번호에 맞춰 System Instruction의 스타일/템플릿을 준수하는 영문 이미지 프롬프트를 작성하세요.\n"
+        f'출력 형식: 번호) "프롬프트 내용" (System Instruction에 다른 출력 형식이 명시되어 있으면 그것을 우선 따름)\n'
     )
 
     response = client.models.generate_content(
